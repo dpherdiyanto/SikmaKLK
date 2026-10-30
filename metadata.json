@@ -1,0 +1,6 @@
+{
+  "name": "SIKMA Kimia UB - Sistem Informasi Akademik & Data Dosen",
+  "description": "Sistem Informasi Kegiatan Mahasiswa dan Akademik Kimia FSTeM Universitas Brawijaya dengan manajemen data dosen, laboratorium kimia, inventaris alat & bahan, formulir bon peminjaman, serta portal akademik terintegrasi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
