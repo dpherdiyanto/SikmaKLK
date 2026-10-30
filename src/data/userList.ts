@@ -15,6 +15,7 @@ export interface UserAccountItem {
   tanggalDibuat: string;
   terakhirLogin: string;
   noHp?: string;
+  semester?: string;
 }
 
 export const INITIAL_USER_ACCOUNTS: UserAccountItem[] = [

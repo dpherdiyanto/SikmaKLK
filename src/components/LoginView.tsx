@@ -275,7 +275,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
             <div>
               <div className="flex items-center space-x-2">
                 <span className="text-lg font-bold tracking-tight text-white">
-                  SIKMA <span className="text-[#D4AF37]">KIMIA</span> UB
+                  SIKMA KLK <span className="text-[#D4AF37]">KIMIA</span> UB
                 </span>
                 <span className="text-[10px] uppercase font-bold bg-[#D4AF37] text-[#002B49] px-1.5 py-0.5 rounded">
                   FSTeM
@@ -306,16 +306,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           {/* Left Column: Brand & Role Selection Info */}
           <div className="lg:col-span-5 space-y-6">
             <div className="space-y-3">
-              <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-[#002B49]/10 text-[#002B49] border border-[#002B49]/20 text-xs font-semibold">
-                <Sparkles className="w-3.5 h-3.5 text-[#D4AF37]" />
-                <span>Portal Resmi Departemen Kimia UB</span>
-              </div>
               <h2 className="text-2xl sm:text-3xl font-extrabold text-[#002B49] tracking-tight leading-tight">
-                Selamat Datang di Portal SIKMA Kimia
+                Selamat Datang di Portal SIKMA KLK Kimia
               </h2>
-              <p className="text-sm text-slate-600 leading-relaxed">
-                Pilih peran Anda untuk mengakses layanan kegiatan akademik, bimbingan skripsi, verifikasi laboratorium kimia, logbook KLK/MBKM, dan administrasi surat resmi.
-              </p>
             </div>
 
             {/* Role Switcher Cards */}
@@ -360,36 +353,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                     </button>
                   );
                 })}
-              </div>
-            </div>
-
-            {/* Selected Role Context Card */}
-            <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-sm space-y-2.5">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold text-slate-500 uppercase tracking-wider">
-                  Hak Akses & Otoritas Peran
-                </span>
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${currentAccount.badgeColor}`}
-                >
-                  {currentAccount.badgeLabel}
-                </span>
-              </div>
-              <p className="text-xs text-slate-700 leading-relaxed">
-                {currentAccount.deskripsiPeran}
-              </p>
-              <div className="pt-2 border-t border-slate-100">
-                <div className="text-[11px] font-semibold text-slate-900 mb-1.5">
-                  Fitur Tersedia:
-                </div>
-                <ul className="space-y-1 text-xs text-slate-600">
-                  {currentAccount.fiturUtama.map((feat, idx) => (
-                    <li key={idx} className="flex items-start space-x-1.5">
-                      <span className="text-emerald-600 font-bold">✓</span>
-                      <span>{feat}</span>
-                    </li>
-                  ))}
-                </ul>
               </div>
             </div>
           </div>
@@ -567,91 +530,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                     )}
                   </button>
                 </form>
-
-                {/* Quick 1-Click Role Logins */}
-                <div className="pt-4 border-t border-slate-200">
-                  <div className="text-center text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-2.5">
-                    Masuk Cepat Sebagai Peran Lain:
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    {roleConfigs.map((cfg) => {
-                      const Icon = cfg.icon;
-                      return (
-                        <button
-                          key={cfg.role}
-                          id={`quick-login-${cfg.role}`}
-                          type="button"
-                          onClick={() => handleQuickLogin(cfg.role)}
-                          className="px-2.5 py-2 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 hover:border-slate-300 text-slate-700 transition-all text-left flex items-center space-x-1.5"
-                        >
-                          <Icon className="w-3.5 h-3.5 text-[#002B49] flex-shrink-0" />
-                          <span className="text-[11px] font-semibold truncate">
-                            {cfg.title}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                {/* Registered / Custom Users Quick Picker if any added */}
-                {(() => {
-                  const allAccs = getUserAccounts();
-                  const customList = allAccs.filter(
-                    (acc) => !INITIAL_USER_ACCOUNTS.some((init) => init.id === acc.id)
-                  );
-                  if (customList.length === 0) return null;
-                  return (
-                    <div className="pt-3 border-t border-slate-200">
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-amber-700 mb-2 flex items-center gap-1.5">
-                        <Sparkles className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Pengguna Baru Ditambahkan ({customList.length}):</span>
-                      </div>
-                      <div className="space-y-1.5 max-h-36 overflow-y-auto pr-1">
-                        {customList.map((usr) => (
-                          <div
-                            key={usr.id}
-                            className="p-2 bg-amber-50/80 border border-amber-200 rounded-lg flex items-center justify-between text-xs"
-                          >
-                            <div className="truncate mr-2">
-                              <div className="font-bold text-slate-900 truncate">
-                                {usr.nama} <span className="text-slate-500 font-normal">(@{usr.username})</span>
-                              </div>
-                              <div className="text-[10px] text-slate-600 font-mono flex items-center gap-1">
-                                <span>Pass:</span>
-                                <span className="font-bold text-[#002B49] bg-white px-1 py-0.5 rounded border border-amber-300">{usr.password || '123456'}</span>
-                                <span className="text-slate-400">•</span>
-                                <span className="capitalize">{usr.role}</span>
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedRole(usr.role);
-                                setUsername(usr.username);
-                                setPassword(usr.password || '');
-                                setErrorMessage('');
-                              }}
-                              className="px-2 py-1 bg-[#002B49] text-[#D4AF37] hover:bg-[#003865] rounded text-[11px] font-bold shrink-0 transition-colors shadow-xs flex items-center gap-1"
-                            >
-                              <span>Pilih Akun</span>
-                              <ChevronRight className="w-3 h-3" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
-              </div>
-
-              {/* Box Footer info */}
-              <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between text-[11px] text-slate-500 gap-2">
-                <span className="flex items-center space-x-1">
-                  <Info className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Single Sign-On (SSO) Terintegrasi SIAM / SIADO UB</span>
-                </span>
-                <span className="font-mono text-slate-400">CI 3.1.13 MVC</span>
               </div>
             </div>
           </div>

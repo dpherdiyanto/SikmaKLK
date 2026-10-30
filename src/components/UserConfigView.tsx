@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 import { UserRole, AuthUser, Dosen, Mahasiswa, AdminStaff, PLPStaff } from '../types/sikma';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS } from '../data/userList';
+import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import {
   checkPasswordCriteria,
   getPasswordValidationMessage,
@@ -319,8 +320,9 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     role: 'mahasiswa' as UserRole,
     identifier: '',
     email: '',
-    unit: 'Departemen Kimia FSTeM Universitas Brawijaya',
-    jabatan: '',
+    unit: 'Program Studi S1 Kimia FSTeM UB',
+    jabatan: 'Mahasiswa',
+    semester: 'Ganjil 2026 / 2027',
     status: 'Aktif' as 'Aktif' | 'Nonaktif' | 'Ditangguhkan',
     noHp: ''
   });
@@ -383,7 +385,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       identifier: '',
       email: '',
       unit: 'Program Studi S1 Kimia FSTeM UB',
-      jabatan: 'Mahasiswa Aktif',
+      jabatan: 'Mahasiswa',
+      semester: 'Ganjil 2026 / 2027',
       status: 'Aktif',
       noHp: ''
     });
@@ -400,8 +403,9 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       role: user.role,
       identifier: user.identifier,
       email: user.email,
-      unit: user.unit,
-      jabatan: user.jabatan,
+      unit: user.unit || 'Program Studi S1 Kimia FSTeM UB',
+      jabatan: user.jabatan || 'Mahasiswa',
+      semester: user.semester || 'Ganjil 2026 / 2027',
       status: user.status,
       noHp: user.noHp || ''
     });
@@ -1458,17 +1462,49 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Jabatan / Status</label>
-                  <input
-                    type="text"
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Jabatan / Status *</label>
+                  <select
                     value={formData.jabatan}
                     onChange={(e) => setFormData({ ...formData, jabatan: e.target.value })}
-                    placeholder="Dosen Pembimbing / Mahasiswa Aktif"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  />
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                  >
+                    <option value="Mahasiswa">Mahasiswa</option>
+                    <option value="Admin">Admin</option>
+                    <option value="Dosen">Dosen</option>
+                    <option value="PLP">PLP</option>
+                  </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status Akun</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Semester *</label>
+                  <select
+                    value={formData.semester}
+                    onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                  >
+                    {INITIAL_SEMESTER_LIST.map((sem) => (
+                      <option key={sem.id} value={sem.namaSemester}>
+                        {sem.namaSemester} {sem.status === 'Aktif' ? '(Aktif)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Program Studi *</label>
+                  <select
+                    value={formData.unit}
+                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                  >
+                    <option value="Program Studi S1 Kimia FSTeM UB">Program Studi S1 Kimia FSTeM UB</option>
+                    <option value="Program Studi S2 Kimia FSTeM UB">Program Studi S2 Kimia FSTeM UB</option>
+                    <option value="Program Studi S3 Kimia FSTeM UB">Program Studi S3 Kimia FSTeM UB</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status Akun *</label>
                   <select
                     value={formData.status}
                     onChange={(e) => setFormData({ ...formData, status: e.target.value as 'Aktif' | 'Nonaktif' })}
@@ -1478,17 +1514,6 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                     <option value="Nonaktif">Nonaktif</option>
                   </select>
                 </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Unit / Program Studi</label>
-                <input
-                  type="text"
-                  value={formData.unit}
-                  onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-                  placeholder="Program Studi S1 Kimia FSTeM UB"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                />
               </div>
 
               <div className="flex items-center justify-end space-x-2 pt-4 border-t border-slate-100">
