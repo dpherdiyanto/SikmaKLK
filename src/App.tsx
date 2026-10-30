@@ -38,7 +38,6 @@ import { UserAccountItem, INITIAL_USER_ACCOUNTS } from './data/userList';
 import { syncSdmToUserAccounts } from './utils/syncUserAndSdm';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
-import { DashboardView } from './components/DashboardView';
 import { DosenManagement } from './components/DosenManagement';
 import { MahasiswaManagement } from './components/MahasiswaManagement';
 import { AdminManagement } from './components/AdminManagement';
@@ -84,7 +83,7 @@ const AccessDeniedNotice: React.FC<AccessDeniedNoticeProps> = ({ menuTitle, onBa
       onClick={onBack}
       className="px-5 py-2.5 bg-[#002B49] text-white rounded-xl text-xs font-bold hover:bg-[#003865] transition-all shadow-sm cursor-pointer"
     >
-      Kembali ke Dashboard
+      Kembali ke KLK
     </button>
   </div>
 );
@@ -127,7 +126,7 @@ export default function App() {
   });
 
   // Navigation & Role State (Terkunci sesuai akun login, tidak bisa diubah dari dalam)
-  const [activeTab, setActiveTab] = useState<ActiveTab>('dashboard');
+  const [activeTab, setActiveTab] = useState<ActiveTab>('klk');
   const currentRole: UserRole = currentUser ? currentUser.role : 'mahasiswa';
 
   // Persistence State
@@ -224,8 +223,13 @@ export default function App() {
     localStorage.setItem('sikma_klk_data', JSON.stringify(klkList));
   }, [klkList]);
 
-  // Guard: if role is mahasiswa and active tab is restricted, redirect
+  // Guard: if role is restricted for active tab, redirect
   useEffect(() => {
+    if (currentRole !== 'super_admin' && currentRole !== 'admin') {
+      if (activeTab === 'ci3-architecture') {
+        setActiveTab('klk');
+      }
+    }
     if (currentRole === 'mahasiswa') {
       const restrictedTabs: ActiveTab[] = [
         'permissions',
@@ -247,7 +251,7 @@ export default function App() {
         if (activeTab === 'data-alat' || activeTab === 'data-bahan') {
           setActiveTab('data-laboratorium');
         } else {
-          setActiveTab('dashboard');
+          setActiveTab('klk');
         }
       }
     }
@@ -595,18 +599,6 @@ export default function App() {
 
         {/* Dynamic Content View Area */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto w-full min-w-0">
-          {activeTab === 'dashboard' && (
-            <DashboardView
-              currentRole={currentRole}
-              student={student}
-              dosenList={dosenList}
-              seminarList={seminarList}
-              pengumumanList={PENGUMUMAN_LIST}
-              logbooks={logbooks}
-              onNavigate={setActiveTab}
-            />
-          )}
-
           {activeTab === 'profile' && (
             <ProfileView
               currentUser={currentUser}
@@ -626,7 +618,7 @@ export default function App() {
 
           {(activeTab === 'user' || activeTab === 'config-user') && (
             currentRole === 'mahasiswa' ? (
-              <AccessDeniedNotice menuTitle="User (Manajemen Akun)" onBack={() => setActiveTab('dashboard')} />
+              <AccessDeniedNotice menuTitle="User (Manajemen Akun)" onBack={() => setActiveTab('klk')} />
             ) : (
               <UserConfigView
                 currentRole={currentRole}
@@ -668,7 +660,7 @@ export default function App() {
 
           {(activeTab === 'semester' || activeTab === 'config-semester') && (
             currentRole === 'mahasiswa' ? (
-              <AccessDeniedNotice menuTitle="Semester Akademik" onBack={() => setActiveTab('dashboard')} />
+              <AccessDeniedNotice menuTitle="Semester Akademik" onBack={() => setActiveTab('klk')} />
             ) : (
               <SemesterConfigView
                 currentRole={currentRole}
@@ -678,7 +670,7 @@ export default function App() {
 
           {(activeTab === 'instansi' || activeTab === 'config-instansi') && (
             currentRole === 'mahasiswa' ? (
-              <AccessDeniedNotice menuTitle="Instansi Mitra" onBack={() => setActiveTab('dashboard')} />
+              <AccessDeniedNotice menuTitle="Instansi Mitra" onBack={() => setActiveTab('klk')} />
             ) : (
               <InstansiConfigView
                 currentRole={currentRole}
@@ -694,7 +686,7 @@ export default function App() {
 
           {(activeTab === 'ruangan' || activeTab === 'config-ruangan') && (
             currentRole === 'mahasiswa' ? (
-              <AccessDeniedNotice menuTitle="Ruangan & Fasilitas" onBack={() => setActiveTab('dashboard')} />
+              <AccessDeniedNotice menuTitle="Ruangan & Fasilitas" onBack={() => setActiveTab('klk')} />
             ) : (
               <RuanganConfigView
                 currentRole={currentRole}
@@ -704,7 +696,7 @@ export default function App() {
 
           {(activeTab === 'arsip' || activeTab === 'config-arsip') && (
             currentRole === 'mahasiswa' ? (
-              <AccessDeniedNotice menuTitle="Arsip Departemen" onBack={() => setActiveTab('dashboard')} />
+              <AccessDeniedNotice menuTitle="Arsip Departemen" onBack={() => setActiveTab('klk')} />
             ) : (
               <ArsipConfigView
                 currentRole={currentRole}
@@ -726,7 +718,7 @@ export default function App() {
             currentRole === 'mahasiswa' ? (
               <AccessDeniedNotice
                 menuTitle="Data Mahasiswa (Sumber Daya Manusia)"
-                onBack={() => setActiveTab('dashboard')}
+                onBack={() => setActiveTab('klk')}
               />
             ) : (
               <MahasiswaManagement
@@ -802,30 +794,6 @@ export default function App() {
             />
           )}
 
-          {activeTab === 'alur-skripsi' && (
-            <SkripsiLaboratoriumView
-              currentRole={currentRole}
-              student={student}
-              dosenList={dosenList}
-              logbooks={logbooks}
-              onAddLogbook={handleAddLogbook}
-              onVerifyLogbook={handleVerifyLogbook}
-              initialTab="alur"
-            />
-          )}
-
-          {activeTab === 'logbook-lab' && (
-            <SkripsiLaboratoriumView
-              currentRole={currentRole}
-              student={student}
-              dosenList={dosenList}
-              logbooks={logbooks}
-              onAddLogbook={handleAddLogbook}
-              onVerifyLogbook={handleVerifyLogbook}
-              initialTab="logbook"
-            />
-          )}
-
           {activeTab === 'bebas-lab' && (
             <SkripsiLaboratoriumView
               currentRole={currentRole}
@@ -844,15 +812,6 @@ export default function App() {
               seminarList={seminarList}
               dosenList={dosenList}
               onAddSeminar={handleAddSeminar}
-            />
-          )}
-
-          {activeTab === 'layanan-surat' && (
-            <LayananSuratView
-              currentRole={currentRole}
-              student={student}
-              suratList={suratList}
-              onAddSurat={handleAddSurat}
             />
           )}
 
@@ -896,7 +855,13 @@ export default function App() {
             <PengumumanView pengumumanList={PENGUMUMAN_LIST} />
           )}
 
-          {activeTab === 'ci3-architecture' && <Ci3CodeViewer />}
+          {activeTab === 'ci3-architecture' && (
+            (currentRole === 'super_admin' || currentRole === 'admin') ? (
+              <Ci3CodeViewer />
+            ) : (
+              <AccessDeniedNotice menuTitle="Arsitektur CodeIgniter 3" onBack={() => setActiveTab('dashboard')} />
+            )
+          )}
         </main>
       </div>
 
@@ -908,15 +873,17 @@ export default function App() {
           </div>
           <div className="flex items-center space-x-4 text-[11px]">
             <span>SIKMA Kimia UB Portal</span>
-            <span>&bull;</span>
-            <span className="text-[#D4AF37]">CodeIgniter 3.1.x MVC</span>
-            <span>&bull;</span>
-            <button
-              onClick={() => setActiveTab('ci3-architecture')}
-              className="text-[#D4AF37] hover:underline"
-            >
-              Unduh Kode CI3
-            </button>
+            {(currentRole === 'super_admin' || currentRole === 'admin') && (
+              <>
+                <span>&bull;</span>
+                <button
+                  onClick={() => setActiveTab('ci3-architecture')}
+                  className="text-[#D4AF37] hover:underline"
+                >
+                  Unduh Kode CI3
+                </button>
+              </>
+            )}
           </div>
         </div>
       </footer>

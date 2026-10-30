@@ -4,49 +4,11 @@ import {
   Code2,
   FileCode,
   Database,
-  Copy,
-  Check,
-  Download,
-  FolderTree,
-  Terminal,
-  Server,
-  Layers
+  FolderTree
 } from 'lucide-react';
 
 export const Ci3CodeViewer: React.FC = () => {
   const [selectedFile, setSelectedFile] = useState<CI3CodeFile>(CI3_SOURCE_FILES[0]);
-  const [copied, setCopied] = useState(false);
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(selectedFile.code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleDownloadSingle = () => {
-    const blob = new Blob([selectedFile.code], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = selectedFile.name;
-    a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const handleDownloadAll = () => {
-    // Generate combined bundle script or SQL
-    const fullBundle = CI3_SOURCE_FILES.map(
-      (f) => `/* ==========================================================\n * FILE: ${f.path}\n * ========================================================== */\n\n${f.code}\n\n`
-    ).join('\n');
-
-    const blob = new Blob([fullBundle], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'SIKMA_KIMIA_UB_CodeIgniter3_Package.txt';
-    a.click();
-    URL.revokeObjectURL(url);
-  };
 
   return (
     <div className="space-y-6">
@@ -61,33 +23,9 @@ export const Ci3CodeViewer: React.FC = () => {
             Struktur Kode Sumber MVC CodeIgniter 3 (CI 3.1.x)
           </h2>
           <p className="text-xs text-slate-500 mt-0.5">
-            Implementasi resmi arsitektur Model-View-Controller (MVC) untuk SIKMA Kimia FSTeM Universitas Brawijaya
+            Implementasi arsitektur Model-View-Controller (MVC) untuk SIKMA Kimia FSTeM Universitas Brawijaya
           </p>
         </div>
-
-        <div className="flex items-center space-x-2">
-          <button
-            onClick={handleDownloadAll}
-            className="px-4 py-2 bg-[#002B49] text-[#D4AF37] font-bold rounded-lg text-xs hover:bg-[#003865] transition-colors shadow-sm flex items-center gap-1.5"
-          >
-            <Download className="w-4 h-4" />
-            <span>Unduh Seluruh Berkas CI3 (.txt / .sql)</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Deployment & Setup Guide Box */}
-      <div className="p-4 bg-slate-900 text-slate-200 rounded-xl border border-slate-800 text-xs space-y-2">
-        <div className="flex items-center space-x-2 text-[#D4AF37] font-bold">
-          <Server className="w-4 h-4" />
-          <span>Panduan Deployment CodeIgniter 3 di Web Server Kampus UB (Apache / Nginx / XAMPP):</span>
-        </div>
-        <ol className="list-decimal list-inside space-y-1 text-slate-300 text-[11px] leading-relaxed pl-2">
-          <li>Salin direktori ini ke root web server Anda: <code className="text-amber-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">/var/www/html/sikmakimia/</code> atau <code className="text-amber-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">C:/xampp/htdocs/sikmakimia/</code></li>
-          <li>Impor database relasional: <code className="text-amber-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">mysql -u root -p db_sikma_kimia_ub &lt; database/db_sikma_kimia_ub.sql</code></li>
-          <li>Konfigurasi database pada <code className="text-amber-300 bg-slate-800 px-1.5 py-0.5 rounded font-mono">application/config/database.php</code> sesuaikan username & password MySQL Anda.</li>
-          <li>Buka di peramban: <code className="text-emerald-400 bg-slate-800 px-1.5 py-0.5 rounded font-mono">https://sikmakimia.ub.ac.id/dosen</code></li>
-        </ol>
       </div>
 
       {/* Code Browser Layout */}
@@ -146,7 +84,7 @@ export const Ci3CodeViewer: React.FC = () => {
         {/* Code Editor Preview */}
         <div className="lg:col-span-3 bg-slate-900 rounded-xl border border-slate-800 shadow-lg overflow-hidden flex flex-col">
           {/* Top file meta bar */}
-          <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
+          <div className="px-4 py-3 bg-slate-950 border-b border-slate-800 flex items-center justify-between text-xs">
             <div className="flex items-center space-x-3">
               <span className="font-mono text-emerald-400 font-bold">
                 {selectedFile.path}
@@ -154,23 +92,6 @@ export const Ci3CodeViewer: React.FC = () => {
               <span className="text-[10px] uppercase px-2 py-0.5 rounded bg-slate-800 text-slate-300 font-mono">
                 {selectedFile.type}
               </span>
-            </div>
-
-            <div className="flex items-center space-x-2">
-              <button
-                onClick={handleCopy}
-                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium transition-colors flex items-center gap-1"
-              >
-                {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{copied ? 'Tersalin!' : 'Salin Kode'}</span>
-              </button>
-              <button
-                onClick={handleDownloadSingle}
-                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-[11px] font-medium transition-colors flex items-center gap-1"
-              >
-                <Download className="w-3.5 h-3.5" />
-                <span>Unduh File</span>
-              </button>
             </div>
           </div>
 

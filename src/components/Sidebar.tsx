@@ -86,12 +86,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const menuItems: MenuItem[] = [
     {
-      id: 'dashboard',
-      label: 'Dashboard SIKMA',
-      icon: LayoutDashboard,
-      section: 'Utama'
-    },
-    {
       id: 'profile',
       label: 'Profile',
       icon: User,
@@ -270,20 +264,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       section: 'Akademik Mahasiswa'
     },
     {
-      id: 'alur-skripsi',
-      label: 'Alur Skripsi & Tugas Akhir',
-      icon: BookOpen,
-      section: 'Tugas Akhir & Lab'
-    },
-    {
-      id: 'logbook-lab',
-      label: 'Logbook Riset Lab Kimia',
-      icon: FlaskConical,
-      badge: pendingLogbooksCount > 0 ? `${pendingLogbooksCount} Pending` : undefined,
-      badgeColor: 'bg-amber-100 text-amber-800',
-      section: 'Tugas Akhir & Lab'
-    },
-    {
       id: 'bebas-lab',
       label: 'Bebas Laboratorium',
       icon: FileCheck2,
@@ -293,12 +273,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'jadwal-seminar',
       label: 'Jadwal Seminar & Sidang',
       icon: CalendarCheck,
-      section: 'Jadwal & Layanan'
-    },
-    {
-      id: 'layanan-surat',
-      label: 'Layanan Surat & Izin',
-      icon: FileText,
       section: 'Jadwal & Layanan'
     },
     {
@@ -313,7 +287,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Code2,
       badge: 'CI3 MVC',
       badgeColor: 'bg-red-100 text-red-700 font-mono',
-      section: 'Developer Portal'
+      section: 'Developer Portal',
+      allowedRoles: ['super_admin', 'admin']
     }
   ];
 
@@ -535,17 +510,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           );
         })}
       </nav>
-
-      {/* Footer Info inside Sidebar */}
-      <div className="p-3.5 bg-slate-50 border-t border-slate-200 text-[11px] text-slate-500">
-        <div className="flex items-center justify-between font-semibold text-slate-700 mb-1">
-          <span>Portal SIKMA UB</span>
-          <span className="text-[#002B49] font-mono text-[10px] bg-slate-200 px-1.5 py-0.5 rounded">CI 3.1.13</span>
-        </div>
-        <div className="text-[10px] text-slate-400 leading-tight">
-          Gedung Jurusan Kimia FSTeM UB, Jl. Veteran Malang 65145
-        </div>
-      </div>
     </aside>
   );
 };

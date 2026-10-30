@@ -36,7 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="flex items-center space-x-3">
           <span className="inline-flex items-center text-[#F39C12] font-semibold">
             <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block mr-1.5 animate-pulse"></span>
-            SIKMA KIMIA UB v3.1 (CodeIgniter 3 MVC)
+            SIKMA KIMIA KLK UB v1.0
           </span>
           <span className="hidden md:inline text-slate-400">|</span>
           <span className="hidden md:inline text-slate-300">
@@ -61,7 +61,7 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center space-x-2">
               <h1 className="text-xl font-bold tracking-tight text-white flex items-center gap-1.5">
-                SIKMA <span className="text-[#D4AF37]">KIMIA</span> UB
+                SIKMA KLK <span className="text-[#D4AF37]">KIMIA</span>
               </h1>
               <span className="text-[10px] uppercase font-bold bg-[#D4AF37] text-slate-950 px-1.5 py-0.5 rounded">
                 FSTeM

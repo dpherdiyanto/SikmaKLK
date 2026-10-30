@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { AuthUser, UserRole } from '../types/sikma';
+import { UbLogo } from './UbLogo';
 import {
   User,
   ShieldCheck,
@@ -446,18 +447,12 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                   <span className="text-slate-400 block text-[11px]">Departemen</span>
                   <span className="font-semibold text-slate-800">Departemen Kimia</span>
                 </div>
-                <div>
-                  <span className="text-slate-400 block text-[11px]">Platform</span>
-                  <span className="font-mono text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
-                    SIKMA KIMIA v3.1 (CodeIgniter 3 MVC)
-                  </span>
-                </div>
               </div>
             </div>
 
             <div className="bg-gradient-to-br from-blue-50 to-indigo-50/50 rounded-2xl border border-blue-200 p-5 space-y-3">
               <div className="flex items-center gap-2 text-blue-900 font-bold text-xs">
-                <Sparkles className="w-4 h-4 text-amber-500" />
+                <UbLogo className="w-5 h-5 shrink-0 object-contain" />
                 <span>Status Akun Aktif</span>
               </div>
               <p className="text-[11px] text-slate-600 leading-relaxed">

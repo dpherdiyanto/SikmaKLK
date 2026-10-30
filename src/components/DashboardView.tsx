@@ -134,11 +134,11 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span>KRS & KHS</span>
             </button>
             <button
-              onClick={() => onNavigate('logbook-lab')}
+              onClick={() => onNavigate('skripsi')}
               className="px-4 py-2 bg-white/10 text-white rounded-lg text-xs font-semibold hover:bg-white/20 transition-colors border border-white/20 flex items-center gap-1.5"
             >
-              <FlaskConical className="w-4 h-4" />
-              <span>Logbook Lab</span>
+              <BookOpen className="w-4 h-4" />
+              <span>Skripsi</span>
             </button>
           </div>
         </div>
@@ -340,10 +340,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           </div>
           <div className="flex-shrink-0 flex items-center gap-2">
             <button
-              onClick={() => onNavigate('logbook-lab')}
+              onClick={() => onNavigate('skripsi')}
               className="px-3.5 py-1.5 rounded-lg bg-[#002B49] text-white text-xs font-semibold hover:bg-[#003865] transition-colors"
             >
-              + Isi Logbook Lab
+              Cek Skripsi
             </button>
             <button
               onClick={() => onNavigate('bebas-lab')}
