@@ -5026,114 +5026,67 @@ Tanggal Unduh : ${new Date().toLocaleDateString('id-ID', {
               </div>
             </div>
 
-            {/* Pilihan Semester (dari Master Data Semester) & Pilihan Status (Hanya Super Admin & Admin) */}
-            <div className={`p-4 bg-slate-50 rounded-xl border border-slate-200 grid grid-cols-1 ${canManageStatus ? 'md:grid-cols-2' : ''} gap-4`}>
-              <div>
-                <label className="font-bold text-slate-800 flex items-center justify-between mb-1.5">
-                  <span className="flex items-center gap-1.5">
-                    <Calendar className="w-4 h-4 text-[#002B49]" />
-                    <span>Semester</span>
-                    <span className="text-red-500">*</span>
-                  </span>
-                  <span className="text-[10px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                    Data Semester
-                  </span>
-                </label>
-                <select
-                  id="select-semester-klk"
-                  value={formSemester}
-                  onChange={(e) => setFormSemester(e.target.value)}
-                  className="w-full p-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#002B49] text-xs font-semibold text-slate-800 shadow-xs"
-                >
-                  {semesterOptions.map((sem) => (
-                    <option key={sem.id} value={sem.namaSemester}>
-                      {sem.namaSemester} {sem.status === 'Aktif' ? '• (Aktif)' : `• (${sem.status})`}
-                    </option>
-                  ))}
-                </select>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Pilihan semester pelaksanaan dari master data Semester (Ganjil 2023 / 2024 s.d. Ganjil 2030 / 2031).
-                </p>
-              </div>
-
-              {/* Status KLK - Hanya bisa diakses oleh Super Admin dan Admin */}
-              {canManageStatus && (
+            {/* Pilihan Semester (dari Master Data Semester) & Skema Kegiatan Luar Kampus (KLK) Bersebelahan */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {/* Pilihan Semester (dari Master Data Semester) */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between">
                 <div>
                   <label className="font-bold text-slate-800 flex items-center justify-between mb-1.5">
                     <span className="flex items-center gap-1.5">
-                      <ShieldCheck className="w-4 h-4 text-[#002B49]" />
-                      <span>Status</span>
+                      <Calendar className="w-4 h-4 text-[#002B49]" />
+                      <span>Semester</span>
                       <span className="text-red-500">*</span>
                     </span>
                     <span className="text-[10px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                      Khusus Super Admin & Admin
+                      Data Semester
                     </span>
                   </label>
-                  <div className="flex items-center gap-2">
-                    <select
-                      id="select-status-klk"
-                      value={formStatus}
-                      onChange={(e) => setFormStatus(e.target.value as StatusKLK)}
-                      className="w-full p-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#002B49] text-xs font-bold text-slate-800 shadow-xs"
-                    >
-                      <option value="Diproses">Diproses</option>
-                      <option value="Disetujui">Disetujui</option>
-                      <option value="Ditolak">Ditolak</option>
-                    </select>
-
-                    <div className="shrink-0">
-                      {formStatus === 'Diproses' && (
-                        <span className="inline-flex items-center gap-1 px-3 py-2 bg-amber-100 text-amber-800 rounded-lg font-bold text-xs border border-amber-300">
-                          <Clock className="w-3.5 h-3.5 text-amber-700" />
-                          <span>Diproses</span>
-                        </span>
-                      )}
-                      {formStatus === 'Disetujui' && (
-                        <span className="inline-flex items-center gap-1 px-3 py-2 bg-emerald-100 text-emerald-800 rounded-lg font-bold text-xs border border-emerald-300">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-700" />
-                          <span>Disetujui</span>
-                        </span>
-                      )}
-                      {formStatus === 'Ditolak' && (
-                        <span className="inline-flex items-center gap-1 px-3 py-2 bg-rose-100 text-rose-800 rounded-lg font-bold text-xs border border-rose-300">
-                          <X className="w-3.5 h-3.5 text-rose-700" />
-                          <span>Ditolak</span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
+                  <select
+                    id="select-semester-klk"
+                    value={formSemester}
+                    onChange={(e) => setFormSemester(e.target.value)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#002B49] text-xs font-semibold text-slate-800 shadow-xs"
+                  >
+                    {semesterOptions.map((sem) => (
+                      <option key={sem.id} value={sem.namaSemester}>
+                        {sem.namaSemester} {sem.status === 'Aktif' ? '• (Aktif)' : `• (${sem.status})`}
+                      </option>
+                    ))}
+                  </select>
                   <p className="text-[11px] text-slate-500 mt-1">
-                    Pilihan status awal: <strong>Diproses</strong> (dalam review), <strong>Disetujui</strong> (diterima), atau <strong>Ditolak</strong>.
+                    Pilihan semester pelaksanaan dari master data Semester (Ganjil 2023 / 2024 s.d. Ganjil 2030 / 2031).
                   </p>
                 </div>
-              )}
-            </div>
+              </div>
 
-            {/* Skema Kegiatan Luar Kampus (KLK) */}
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-              <label className="font-bold text-slate-800 block mb-1.5 text-xs flex items-center justify-between">
-                <span className="flex items-center gap-1.5">
-                  <Briefcase className="w-4 h-4 text-[#002B49]" />
-                  <span>Skema Kegiatan Luar Kampus (KLK)</span>
-                  <span className="text-red-500">*</span>
-                </span>
-                <span className="text-[10px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
-                  Pilihan Skema Resmi
-                </span>
-              </label>
-              <select
-                id="select-skema-klk-baru"
-                value={formSkema}
-                onChange={(e) => setFormSkema(e.target.value as SkemaKLK)}
-                className="w-full p-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#002B49] text-xs font-semibold text-slate-800 shadow-2xs"
-              >
-                <option value="PKL">PKL</option>
-                <option value="Magang Berdampak (Prodi)">Magang Berdampak (Prodi)</option>
-                <option value="Magang Berdampak (Fakultas)">Magang Berdampak (Fakultas)</option>
-              </select>
-              <p className="text-[11px] text-slate-500 mt-1">
-                Pilih skema pelaksanaan KLK: PKL, Magang Berdampak (Prodi), atau Magang Berdampak (Fakultas).
-              </p>
+              {/* Skema Kegiatan Luar Kampus (KLK) */}
+              <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 flex flex-col justify-between">
+                <div>
+                  <label className="font-bold text-slate-800 flex items-center justify-between mb-1.5 text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <Briefcase className="w-4 h-4 text-[#002B49]" />
+                      <span>Skema Kegiatan Luar Kampus (KLK)</span>
+                      <span className="text-red-500">*</span>
+                    </span>
+                    <span className="text-[10px] font-semibold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
+                      Pilihan Skema Resmi
+                    </span>
+                  </label>
+                  <select
+                    id="select-skema-klk-baru"
+                    value={formSkema}
+                    onChange={(e) => setFormSkema(e.target.value as SkemaKLK)}
+                    className="w-full p-2.5 bg-white border border-slate-300 rounded-lg focus:ring-2 focus:ring-[#002B49] text-xs font-semibold text-slate-800 shadow-2xs"
+                  >
+                    <option value="PKL">PKL</option>
+                    <option value="Magang Berdampak (Prodi)">Magang Berdampak (Prodi)</option>
+                    <option value="Magang Berdampak (Fakultas)">Magang Berdampak (Fakultas)</option>
+                  </select>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    Pilih skema pelaksanaan KLK: PKL, Magang Berdampak (Prodi), atau Magang Berdampak (Fakultas).
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Usulan Mata Kuliah Konversi (Pilihan 1 atau Lebih dengan Kombinasi 4, 7, 10, 13, 16 SKS) */}
