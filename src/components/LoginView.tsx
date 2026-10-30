@@ -226,7 +226,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     {
       role: 'super_admin' as UserRole,
       title: 'Super Admin',
-      subtitle: 'Pimpinan & Kadep',
+      subtitle: 'Super Admin',
       icon: ShieldCheck,
       color: 'from-purple-600 to-indigo-700',
       badgeBg: 'bg-purple-100 text-purple-800 border-purple-200',
