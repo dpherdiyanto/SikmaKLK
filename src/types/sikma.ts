@@ -30,6 +30,8 @@ export interface Dosen {
   topikRiset: string[];
   ruangKantor: string;
   telepon: string;
+  unit?: string;
+  jabatan?: string;
 }
 
 export interface Mahasiswa {
@@ -38,8 +40,13 @@ export interface Mahasiswa {
   nama: string;
   angkatan: string;
   programStudi: string;
-  dosenPAId: string;
-  dosenPANama: string;
+  email?: string;
+  telepon?: string;
+  unit?: string;
+  jabatan?: string;
+  dosenPAId?: string;
+  dosenPANama?: string;
+  dosenPANip?: string;
   status: 'Aktif' | 'Cuti' | 'Lulus';
   semester: number;
   ipk: number;
@@ -142,7 +149,7 @@ export interface Pengumuman {
   penting: boolean;
 }
 
-export type UserRole = 'super_admin' | 'admin' | 'dosen' | 'mahasiswa';
+export type UserRole = 'super_admin' | 'admin' | 'dosen' | 'mahasiswa' | 'eksternal';
 
 export interface AuthUser {
   id: string;
@@ -178,6 +185,7 @@ export type ActiveTab =
   | 'data-mahasiswa'
   | 'admin-management'
   | 'plp-management'
+  | 'pembimbing-lapangan-management'
   | 'laboratorium'
   | 'data-laboratorium'
   | 'data-alat'
@@ -303,6 +311,44 @@ export interface LogbookMingguanKLK {
   statusVerifikasi: 'Menunggu Verifikasi' | 'Disetujui Mentor' | 'Perlu Perbaikan';
   catatanMentor?: string;
   tanggalVerifikasi?: string;
+  tanggapanDosen?: string; // Tanggapan / Feedback Akademik dari Dosen Pembimbing
+  tanggalTanggapanDosen?: string;
+  dosenNama?: string;
+}
+
+export interface AbsenHarianKLK {
+  id: string;
+  tanggal: string; // contoh: "2026-07-01"
+  hari: string; // contoh: "Rabu"
+  jamMasuk: string; // contoh: "08:00 WIB"
+  jamPulang: string; // contoh: "16:30 WIB"
+  aktivitasSingkat: string; // Rincian pekerjaan harian
+  aktivitas?: string;
+  statusKehadiran: 'Hadir' | 'Hadir (WFO)' | 'Hadir (WFH)' | 'Izin' | 'Sakit' | 'Libur Mitra';
+  status?: string;
+  keterangan?: string;
+  statusVerifikasiMentor: 'Terverifikasi' | 'Menunggu Checklist' | 'Terverifikasi Mentor';
+  diverifikasiOleh?: string;
+  waktuVerifikasi?: string;
+  catatanMentor?: string;
+  mingguKe?: number;
+}
+
+export interface SesiBimbinganKLK {
+  id: number;
+  tanggal: string;
+  pokokBahasan: string;
+  pertanyaanMahasiswa?: string;
+  catatanDosen?: string;
+  jawabanDosen?: string;
+  linkGoogleDrive?: string;
+  parafDosen?: boolean;
+  tanggalParaf?: string;
+  status: 'Diproses' | 'Disetujui' | 'Ditolak';
+  waktuTanya?: string;
+  waktuJawab?: string;
+  mahasiswaNama?: string;
+  dosenNama?: string;
 }
 
 export type StatusKLK =
@@ -330,7 +376,11 @@ export interface PengajuanKLK {
   kontakMentor: string;
   noHpMentor?: string;
   emailMentor?: string;
+  dpaNama?: string;
+  dpaId?: string;
   dosenPembimbingKLK: string;
+  isDosenKLKDitetapkanAdmin?: boolean;
+  dosenPembimbingKLKDitetapkan?: boolean;
   tanggalMulai: string;
   tanggalSelesai: string;
   tanggalUjian?: string; // Format: "YYYY-MM-DD" contoh: "2026-07-15"
@@ -339,18 +389,89 @@ export interface PengajuanKLK {
   sksDiakui: number;
   mataKuliahKonversi?: string;
   mataKuliahKonversiList?: string[];
+  deskripsiAlasanKonversi?: string; // Deskripsi atau alasan akademik mahasiswa memilih kombinasi mata kuliah konversi
   status: StatusKLK;
   nomorSuratTugas?: string;
   nilaiIndustri?: number;
   nilaiDosen?: number;
   nilaiAkhirHuruf?: 'A' | 'B+' | 'B' | 'C+' | 'C';
   logbooks: LogbookMingguanKLK[];
+  absenHarian?: AbsenHarianKLK[];
+  sesiBimbinganList?: SesiBimbinganKLK[];
   dokumenLoA?: string;
   dokumenSuratLamaran?: string;
   dokumenProposal?: string;
   dokumenCV?: string;
   dokumenTranskrip?: string;
   laporanAkhir?: string;
+  waktuSubmit?: string; // Waktu pengajuan usulan, contoh: "14 Feb 2026, 09:30 WIB"
+  catatanVerifikasi?: string; // Catatan verifikasi dari Super Admin / Admin
+  catatanVerifikasiDosen?: string; // Catatan verifikasi / arahan dari Dosen Pembimbing
+  statusVerifikasiDosen?: 'Menunggu Verifikasi' | 'Disetujui Dosen' | 'Perlu Revisi' | 'Ditolak';
+  dosenVerifikatorKLK?: string;
+  tanggalVerifikasiDosen?: string;
+  verifikasiAkademikDosen?: Record<string, boolean>;
+  suratLamaranDikirim?: boolean;
+  waktuKirimSuratLamaran?: string;
+  statusResponMitra?: 'Belum Dikonfirmasi' | 'Diterima' | 'Ditolak';
+  waktuResponMitra?: string;
+  dokumenSuratBalasanMitra?: string;
+  nomorSuratBalasanMitra?: string;
+  tanggalSuratBalasanMitra?: string;
+  catatanSuratBalasanMitra?: string;
+  waktuKirimSuratBalasanMitra?: string;
+  suratBalasanTerkirimKeDosen?: boolean;
+  suratMitraDisetujuiDosen?: boolean;
+  statusVerifikasiSuratMitraDosen?: 'Menunggu Verifikasi' | 'Disetujui' | 'Perlu Perbaikan';
+  catatanVerifikasiSuratMitraDosen?: string;
+  tanggalVerifikasiSuratMitraDosen?: string;
+  riwayatAktivitas?: ItemRiwayatKLK[];
+  verifikasiBerkasChecklist?: Record<
+    string,
+    {
+      isValid: boolean;
+      statusPemeriksaan?: 'Valid' | 'Perlu Perbaikan' | 'Belum Diperiksa';
+      catatan?: string;
+      checkedBy?: string;
+      checkedAt?: string;
+      kriteria?: Record<string, boolean>;
+    }
+  >;
+}
+
+export interface ItemRiwayatKLK {
+  id: string;
+  waktu: string; // Tanggal & Jam lengkap, contoh: "01 Nov 2026, 16:35 WIB"
+  timestamp: number;
+  role: 'Mahasiswa' | 'Super Admin' | 'Admin' | 'Dosen';
+  namaAktor: string;
+  aksi:
+    | 'Mengirim Formulir'
+    | 'Meneruskan ke Dosen'
+    | 'Mengembalikan untuk Revisi'
+    | 'Menyetujui'
+    | 'Meminta Revisi'
+    | 'Menolak'
+    | string;
+  statusHasil?: StatusKLK | string;
+  catatan?: string;
+  tahap:
+    | 'Pendaftaran'
+    | 'Verifikasi Admin'
+    | 'Verifikasi Dosen'
+    | 'Pelaksanaan'
+    | 'Ujian'
+    | 'Penetapan DP'
+    | string;
+}
+
+export interface BerkasChecklistItem {
+  isValid: boolean;
+  statusPemeriksaan?: 'Valid' | 'Perlu Perbaikan' | 'Belum Diperiksa';
+  catatan?: string;
+  checkedBy?: string;
+  checkedAt?: string;
+  kriteria?: Record<string, boolean>;
 }
 
 export interface MitraIndustriKLK {
@@ -368,11 +489,12 @@ export interface MitraIndustriKLK {
 export interface DokumenPanduanKLK {
   id: string;
   judul: string;
-  kategori: 'Pedoman' | 'Formulir' | 'Materi Sosialisasi' | 'Template';
+  kategori: string;
   deskripsi: string;
   ukuranFile: string;
   tanggalUpdate: string;
-  tipe: 'PDF' | 'DOCX' | 'PPTX';
+  tipe: string;
+  urlDownload?: string;
 }
 
 export interface AdminStaff {
@@ -405,6 +527,22 @@ export interface PLPStaff {
   ruangLab: string;
   status: 'Aktif' | 'Cuti' | 'Tugas Belajar';
   verifikatorBebasLab: boolean;
+  jabatan?: string;
+}
+
+export interface PembimbingLapanganStaff {
+  id: string;
+  idMitra: string;
+  nama: string;
+  gelar?: string;
+  jabatan: string;
+  namaMitra: string;
+  email: string;
+  telepon: string;
+  status: 'Aktif' | 'Nonaktif' | 'Cuti';
+  jumlahMahasiswaBimbingan?: number;
+  alamatInstansi?: string;
+  username?: string;
 }
 
 export interface LabTeamMember {

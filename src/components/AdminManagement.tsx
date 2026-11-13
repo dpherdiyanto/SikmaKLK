@@ -3,7 +3,6 @@ import { AdminStaff, UserRole } from '../types/sikma';
 import {
   Users,
   Search,
-  Plus,
   Edit2,
   Trash2,
   Eye,
@@ -31,6 +30,7 @@ interface AdminManagementProps {
   onAddAdmin: (admin: AdminStaff) => void;
   onUpdateAdmin: (admin: AdminStaff) => void;
   onDeleteAdmin: (id: string) => void;
+  onBulkDeleteAdmin?: (ids: string[]) => void;
 }
 
 export const AdminManagement: React.FC<AdminManagementProps> = ({
@@ -38,7 +38,8 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
   adminList,
   onAddAdmin,
   onUpdateAdmin,
-  onDeleteAdmin
+  onDeleteAdmin,
+  onBulkDeleteAdmin
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<string>('Semua');
@@ -57,6 +58,9 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<AdminStaff | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const canBulkDelete = currentRole === 'super_admin' || currentRole === 'admin';
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // Flash message
   const [flashMessage, setFlashMessage] = useState<{
@@ -89,13 +93,16 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
   // Filtered list
   const filteredList = useMemo(() => {
     return adminList.filter((item) => {
+      if (!item) return false;
+      const q = (searchQuery || '').trim().toLowerCase();
       const matchSearch =
-        item.nama.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.jabatan.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.unit.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        (item.nama && item.nama.toLowerCase().includes(q)) ||
+        (item.jabatan && item.jabatan.toLowerCase().includes(q)) ||
+        (item.unit && item.unit.toLowerCase().includes(q)) ||
+        (item.email && item.email.toLowerCase().includes(q));
       const matchStatus = filterStatus === 'Semua' || item.status === filterStatus;
-      return matchSearch && matchStatus;
+      return Boolean(matchSearch && matchStatus);
     });
   }, [adminList, searchQuery, filterStatus]);
 
@@ -108,6 +115,38 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
   const paginatedList = useMemo(() => {
     return filteredList.slice(startIndex, endIndex);
   }, [filteredList, startIndex, endIndex]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => adminList.some((a) => a.id === id)));
+  }, [adminList]);
+
+  const filteredIds = useMemo(() => filteredList.map((a) => a.id).filter(Boolean), [filteredList]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (!canBulkDelete || selectedIds.length === 0) return;
+    const count = selectedIds.length;
+    if (onBulkDeleteAdmin) {
+      onBulkDeleteAdmin(selectedIds);
+    } else {
+      selectedIds.forEach((id) => onDeleteAdmin(id));
+    }
+    setSelectedIds([]);
+    setBulkDeleteConfirmOpen(false);
+    showFlash('success', `${count} data staf admin terpilih berhasil dihapus.`);
+  };
 
   // Statistics
   const stats = useMemo(() => {
@@ -133,7 +172,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
     if (editingAdmin) {
       const updated: AdminStaff = {
         ...editingAdmin,
-        nip: '',
+        nip: formData.nip || editingAdmin.nip || '',
         nama: formData.nama,
         gelar: formData.gelar,
         jabatan: formData.jabatan,
@@ -175,7 +214,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
   const handleOpenEdit = (admin: AdminStaff) => {
     setEditingAdmin(admin);
     setFormData({
-      nip: '',
+      nip: admin.nip || '',
       nama: admin.nama,
       gelar: admin.gelar,
       jabatan: admin.jabatan,
@@ -253,16 +292,6 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
             <Printer className="w-4 h-4 text-[#D4AF37]" />
             <span>Cetak</span>
           </button>
-          {(currentRole === 'admin' || currentRole === 'super_admin') && (
-            <button
-              id="btn-tambah-admin"
-              onClick={handleOpenAdd}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#D4AF37] hover:bg-[#c49f2e] text-[#002B49] rounded-lg text-xs font-bold shadow-xs transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Staf Admin</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -359,6 +388,34 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
           </div>
         </div>
 
+        {canBulkDelete && selectedIds.length > 0 && (
+          <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-rose-900 font-semibold">
+              <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>
+                <strong>{selectedIds.length}</strong> data admin terpilih untuk dihapus
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+              >
+                Batal Pilih
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Terpilih ({selectedIds.length})</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table */}
         <div className="w-full overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -370,7 +427,25 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                 <th className="p-3 min-w-[200px]">Tupoksi Layanan</th>
                 <th className="p-3 min-w-[180px]">Kontak & Kantor</th>
                 <th className="p-3 text-center w-[90px]">Status</th>
-                <th className="p-3 text-center w-[120px]">Aksi</th>
+                <th className="p-3 text-center w-[150px]">
+                  <div className="flex items-center justify-center gap-2">
+                    <span>Aksi</span>
+                    {canBulkDelete && filteredIds.length > 0 && (
+                      <label
+                        className="inline-flex items-center gap-1 cursor-pointer select-none"
+                        title="Pilih semua data untuk hapus massal"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={toggleSelectAllFiltered}
+                          className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-[#002B49]"
+                        />
+                        <span className="text-[10px] font-medium text-slate-600">Semua</span>
+                      </label>
+                    )}
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -473,7 +548,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
-                        {(currentRole === 'admin' || currentRole === 'super_admin') && (
+                        {canBulkDelete && (
                           <>
                             <button
                               id={`btn-edit-admin-${admin.id}`}
@@ -491,6 +566,17 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
+                            <label
+                              className="inline-flex items-center justify-center p-1 cursor-pointer"
+                              title={`Pilih ${admin.nama} untuk hapus massal`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.includes(admin.id)}
+                                onChange={() => toggleSelectRow(admin.id)}
+                                className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-rose-600"
+                              />
+                            </label>
                           </>
                         )}
                       </div>
@@ -955,6 +1041,37 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold"
               >
                 Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal Bulk Delete */}
+      {canBulkDelete && bulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm border border-slate-200 p-5 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-900">Konfirmasi Hapus Massal Data Admin</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Apakah Anda yakin ingin menghapus <strong>{selectedIds.length}</strong> data staf admin yang dipilih? Tindakan ini tidak dapat dibatalkan.
+            </p>
+            <div className="flex justify-center gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Hapus Semua Terpilih
               </button>
             </div>
           </div>

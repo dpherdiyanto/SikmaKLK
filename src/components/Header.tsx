@@ -86,12 +86,15 @@ export const Header: React.FC<HeaderProps> = ({
                   ? 'bg-amber-600 text-white'
                   : currentRole === 'dosen'
                   ? 'bg-blue-600 text-white'
+                  : currentRole === 'eksternal'
+                  ? 'bg-amber-600 text-white border border-amber-400'
                   : 'bg-emerald-600 text-white'
               }`}
             >
               {currentRole === 'super_admin' && <ShieldCheck className="w-3.5 h-3.5" />}
               {currentRole === 'admin' && <ShieldCheck className="w-3.5 h-3.5" />}
               {currentRole === 'dosen' && <GraduationCap className="w-3.5 h-3.5" />}
+              {currentRole === 'eksternal' && <Building2 className="w-3.5 h-3.5" />}
               {currentRole === 'mahasiswa' && <UserCheck className="w-3.5 h-3.5" />}
               <span>
                 {currentRole === 'super_admin'
@@ -100,6 +103,8 @@ export const Header: React.FC<HeaderProps> = ({
                   ? 'Admin'
                   : currentRole === 'dosen'
                   ? 'Dosen'
+                  : currentRole === 'eksternal'
+                  ? 'User Eksternal'
                   : 'Mahasiswa'}
               </span>
             </span>

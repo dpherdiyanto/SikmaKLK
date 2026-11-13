@@ -623,206 +623,8 @@ export const PENGUMUMAN_LIST: Pengumuman[] = [
   }
 ];
 
-export const INITIAL_KLK: PengajuanKLK[] = [
-  {
-    id: 'klk-1',
-    kodePendaftaran: 'KLK-KIM-2026-0089',
-    mahasiswaId: 'mhs-9',
-    mahasiswaNama: 'Denny Caknan',
-    nim: '235090200111010',
-    semester: 7,
-    namaSemester: 'Ganjil 2026 / 2027',
-    skema: 'Magang Regular',
-    namaMitra: 'PT Petrokimia Gresik',
-    alamatMitra: 'Jl. Jenderal Ahmad Yani, Gresik, Jawa Timur 61119',
-    bidangPekerjaan: 'Departemen Pengendalian Kualitas (QC) - Analisis Spektroskopi dan Kromatografi Produk Kimia & Pupuk',
-    mentorIndustri: 'Ir. Hendra Gunawan, S.T. (Senior QC Chemist)',
-    kontakMentor: '081234890123 / hendra.g@petrokimia-gresik.com',
-    dosenPembimbingKLK: 'Dr. Dra. Hermin Sulistyarti, M.Si',
-    tanggalMulai: '2026-07-01',
-    tanggalSelesai: '2026-09-30',
-    tanggalUjian: '2026-10-15',
-    pukulUjian: '09:00 - 10:30 WIB',
-    ruangUjian: 'Ruang Seminar & Ujian Skripsi',
-    sksDiakui: 6,
-    status: 'Disetujui',
-    nomorSuratTugas: '0814/UN10.F09/AK-KLK/2026',
-    nilaiIndustri: 92.5,
-    nilaiDosen: 90.0,
-    nilaiAkhirHuruf: 'A',
-    dokumenLoA: 'LoA_PT_Petrokimia_Gresik_DennyCaknan.pdf',
-    laporanAkhir: 'Laporan_PKL_Kimia_DennyCaknan_Petrokimia.pdf',
-    logbooks: [
-      {
-        id: 'klk-log-1',
-        mingguKe: 1,
-        tanggalMulai: '2026-07-01',
-        tanggalSelesai: '2026-07-07',
-        aktivitas: 'Induksi K3 Laboratorium Industri Kimia, pengenalan sistem LIMS (Laboratory Information Management System), dan briefing prosedur uji nitrogen total pupuk urea.',
-        alatDanMetode: 'Metode Kjeldahl Semi-Mikro, Spektrofotometer UV-Vis PerkinElmer Lambda 365, buret digital.',
-        hasilDanKendala: 'Memahami SOP keselamatan kerja bahan asam pekat H2SO4 dan reagen Nessler. Verifikasi kurva kalibrasi r = 0.9994.',
-        statusVerifikasi: 'Disetujui Mentor',
-        catatanMentor: 'Mahasiswa sangat tanggap dalam memahami safety protocol laboratorium QC.',
-        tanggalVerifikasi: '2026-07-08'
-      },
-      {
-        id: 'klk-log-2',
-        mingguKe: 2,
-        tanggalMulai: '2026-07-08',
-        tanggalSelesai: '2026-07-14',
-        aktivitas: 'Pengujian kadar fosfat tersedia (P2O5) pada sampel pupuk NPK dengan metode spektrofotometri molibdovanadat.',
-        alatDanMetode: 'Spektrofotometri UV-Vis pada panjang gelombang 400 nm, labu takar klas A, neraca analitik Ohaus.',
-        hasilDanKendala: 'Didapatkan kadar P2O5 sebesar 15.08% (spesifikasi 15.00 ± 0.50%). Sampel memenuhi syarat SNI.',
-        statusVerifikasi: 'Disetujui Mentor',
-        catatanMentor: 'Presisi penimbangan dan pemipetan sampel sangat baik.',
-        tanggalVerifikasi: '2026-07-15'
-      },
-      {
-        id: 'klk-log-3',
-        mingguKe: 3,
-        tanggalMulai: '2026-07-15',
-        tanggalSelesai: '2026-07-21',
-        aktivitas: 'Analisis logam berat (Pb, Cd, As) pada bahan baku batuan fosfat impor menggunakan instrumen ICP-OES.',
-        alatDanMetode: 'Inductively Coupled Plasma Optical Emission Spectrometry (ICP-OES Avio 200), Microwave Digestion.',
-        hasilDanKendala: 'Preparasi destruksi gelombang mikro dengan HNO3 + HF. Kadar Pb terdeteksi 8.4 ppm, masih di bawah ambang batas bahaya.',
-        statusVerifikasi: 'Disetujui Mentor',
-        catatanMentor: 'Lanjutkan pengujian repeatabilitas pada 5 ulangan replikat.',
-        tanggalVerifikasi: '2026-07-22'
-      },
-      {
-        id: 'klk-log-4',
-        mingguKe: 4,
-        tanggalMulai: '2026-07-22',
-        tanggalSelesai: '2026-07-28',
-        aktivitas: 'Uji stabilitas granulasi pupuk lepas lambat (Slow-Release Fertilizer) dengan coating biopolimer kitosan-alginat.',
-        alatDanMetode: 'Oven konveksi, dissolution tester, conductivity meter, SEM (Scanning Electron Microscopy).',
-        hasilDanKendala: 'Laju pelepasan hara pada hari ke-7 mencapai 18.2%, menunjukkan performa coating yang efektif.',
-        statusVerifikasi: 'Menunggu Verifikasi',
-        catatanMentor: ''
-      }
-    ]
-  },
-  {
-    id: 'klk-2',
-    kodePendaftaran: 'KLK-KIM-2026-0094',
-    mahasiswaId: 'mhs-10',
-    mahasiswaNama: 'Rita Sugiarto',
-    nim: '235090201111022',
-    semester: 5,
-    namaSemester: 'Ganjil 2026 / 2027',
-    skema: 'Riset / Penelitian Luar Kampus',
-    namaMitra: 'Pusat Riset Kimia - BRIN Kawasan KST B.J. Habibie Serpong',
-    alamatMitra: 'Kawasan Sains dan Teknologi Serpong, Tangerang Selatan, Banten 15314',
-    bidangPekerjaan: 'Kelompok Riset Material Maju & Katalisis Energi Bersih - Sintesis Green Catalyst Zeolit-Karbon Aktif',
-    mentorIndustri: 'Dr. rer. nat. Agus Haryono, M.Eng (Peneliti Ahli Utama BRIN)',
-    kontakMentor: '08119876543 / agus.haryono@brin.go.id',
-    dosenPembimbingKLK: 'Masruri, S.Si., M.Si., Ph.D',
-    tanggalMulai: '2026-08-01',
-    tanggalSelesai: '2026-11-30',
-    tanggalUjian: '2026-12-05',
-    pukulUjian: '13:00 - 14:30 WIB',
-    ruangUjian: 'Ruang Sidang Jurusan Kimia',
-    sksDiakui: 10,
-    status: 'Disetujui',
-    nomorSuratTugas: '0902/UN10.F09/AK-KLK/2026',
-    dokumenLoA: 'LoA_BRIN_Serpong_RitaSugiarto.pdf',
-    logbooks: [
-      {
-        id: 'klk-log-201',
-        mingguKe: 1,
-        tanggalMulai: '2026-08-01',
-        tanggalSelesai: '2026-08-07',
-        aktivitas: 'Orientasi fasilitas laboratorium riset nanomaterial BRIN, pelatihan instrumen XRD (Rigaku SmartLab) dan BET Surface Area Analyzer.',
-        alatDanMetode: 'XRD, N2 Physisorption BET (Quantachrome), Sonikator Probe.',
-        hasilDanKendala: 'Karakterisasi awal fasa kristal zeolit sintetik menunjukkan struktur mordenit murni.',
-        statusVerifikasi: 'Disetujui Mentor',
-        catatanMentor: 'Proposal riset telah diselaraskan dengan roadmap energi terbarukan PRK-BRIN.',
-        tanggalVerifikasi: '2026-08-08'
-      }
-    ]
-  },
-  {
-    id: 'klk-3',
-    kodePendaftaran: 'KLK-KIM-2026-0071',
-    mahasiswaId: 'mhs-11',
-    mahasiswaNama: 'Mansyur S',
-    nim: '235090207111008',
-    semester: 5,
-    namaSemester: 'Genap 2025 / 2026',
-    skema: 'Magang Industri (MBKM)',
-    namaMitra: 'PT Kalbe Farma Tbk (Corporate R&D)',
-    alamatMitra: 'Kawasan Industri Delta Silicon, Cikarang, Jawa Barat',
-    bidangPekerjaan: 'Analytical Development & Formulasi Eksipien Obat Kimia Terpadu',
-    mentorIndustri: 'Apt. Fransiska Dewi, M.Farm (R&D Section Head)',
-    kontakMentor: '081387654321 / fransiska.dewi@kalbe.co.id',
-    dosenPembimbingKLK: 'Dr. Anna Safitri, M.Sc., Ph.D',
-    tanggalMulai: '2026-02-01',
-    tanggalSelesai: '2026-06-30',
-    tanggalUjian: '2026-07-10',
-    pukulUjian: '10:00 - 11:30 WIB',
-    ruangUjian: 'Ruang Seminar & Ujian Skripsi',
-    sksDiakui: 20,
-    status: 'Selesai & Dinilai',
-    nomorSuratTugas: '0231/UN10.F09/AK-KLK/2026',
-    nilaiIndustri: 94.0,
-    nilaiDosen: 93.0,
-    nilaiAkhirHuruf: 'A',
-    dokumenLoA: 'LoA_Kalbe_Industri_MansyurS.pdf',
-    laporanAkhir: 'Laporan_Magang_Industri_Mansyur_Kalbe.pdf',
-    logbooks: []
-  },
-  {
-    id: 'klk-4',
-    kodePendaftaran: 'KLK-KIM-2026-0102',
-    mahasiswaId: 'mhs-12',
-    mahasiswaNama: 'Rossa',
-    nim: '235090200111039',
-    semester: 5,
-    namaSemester: 'Ganjil 2026 / 2027',
-    skema: 'Magang Regular',
-    namaMitra: 'PT Sucofindo (Persero) Cabang Surabaya',
-    alamatMitra: 'Jl. Ahmad Yani No. 315, Wonocolo, Surabaya 60234',
-    bidangPekerjaan: 'Laboratorium Pengujian Kimia Lingkungan & Analisis Air Limbah Industri',
-    mentorIndustri: 'Dian Permatasari, S.Si (Supervisi Lab Lingkungan)',
-    kontakMentor: '085731234567 / lab_surabaya@sucofindo.co.id',
-    dosenPembimbingKLK: 'Dr. rer. nat. Rachmat Triandi Tjahjanto, S.Si., M.Sc',
-    tanggalMulai: '2026-10-01',
-    tanggalSelesai: '2026-12-31',
-    tanggalUjian: '2027-01-12',
-    pukulUjian: '08:30 - 10:00 WIB',
-    ruangUjian: 'Ruang Kuliah K.2.1',
-    sksDiakui: 4,
-    status: 'Diproses',
-    dokumenLoA: 'Surat_Penerimaan_Magang_Sucofindo_Rossa.pdf',
-    logbooks: []
-  },
-  {
-    id: 'klk-5',
-    kodePendaftaran: 'KLK-KIM-2026-0118',
-    mahasiswaId: 'mhs-1',
-    mahasiswaNama: 'Ahmad Rizky Pratama',
-    nim: '215090200111012',
-    semester: 7,
-    namaSemester: 'Ganjil 2026 / 2027',
-    skema: 'Magang Industri (MBKM)',
-    namaMitra: 'PT Indofood CBP Sukses Makmur Tbk',
-    alamatMitra: 'Kawasan Berikat PIER Pasuruan, Jawa Timur',
-    bidangPekerjaan: 'Quality Assurance & Kimia Pangan - Pengujian Residu dan Proksimat',
-    mentorIndustri: 'Bambang Sudibyo, S.Si (QA Lab Manager)',
-    kontakMentor: '081233445566 / bambang.qa@icbp.indofood.co.id',
-    dosenPembimbingKLK: 'Dr. Anna Safitri, M.Sc., Ph.D',
-    tanggalMulai: '2026-08-15',
-    tanggalSelesai: '2026-11-15',
-    tanggalUjian: '2026-11-28',
-    pukulUjian: '10:00 - 11:30 WIB',
-    ruangUjian: 'Ruang Seminar & Ujian Skripsi',
-    sksDiakui: 7,
-    status: 'Disetujui',
-    nomorSuratTugas: '0955/UN10.F09/AK-KLK/2026',
-    dokumenLoA: 'LoA_Indofood_CBP_AhmadRizkyPratama.pdf',
-    logbooks: []
-  }
-];
+export const INITIAL_KLK: PengajuanKLK[] = [];
+
 
 export const DAFTAR_MITRA_KLK: MitraIndustriKLK[] = [
   {
@@ -893,7 +695,7 @@ export const DAFTAR_MITRA_KLK: MitraIndustriKLK[] = [
   }
 ];
 
-export const DOKUMEN_KLK_LIST: DokumenPanduanKLK[] = [
+export const DOKUMEN_KLK_STANDARD_LIST: DokumenPanduanKLK[] = [
   {
     id: 'dok-klk-1',
     judul: 'Pedoman Pelaksanaan Kegiatan Mahasiswa di Luar Kampus (KLK) Departemen Kimia UB 2026',
@@ -940,3 +742,5 @@ export const DOKUMEN_KLK_LIST: DokumenPanduanKLK[] = [
     tipe: 'DOCX'
   }
 ];
+
+export const DOKUMEN_KLK_LIST: DokumenPanduanKLK[] = [];

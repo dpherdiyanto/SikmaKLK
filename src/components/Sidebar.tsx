@@ -38,6 +38,7 @@ interface SidebarProps {
   pendingLogbooksCount: number;
   adminCount?: number;
   plpCount?: number;
+  pembimbingLapanganCount?: number;
   mahasiswaCount?: number;
 }
 
@@ -69,6 +70,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   pendingLogbooksCount,
   adminCount,
   plpCount,
+  pembimbingLapanganCount,
   mahasiswaCount
 }) => {
   // Track open state for collapsible parent menus like Config and Laboratorium
@@ -161,7 +163,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Users,
       badge: dosenCount,
       badgeColor: 'bg-[#002B49] text-[#D4AF37]',
-      section: 'Sumber Daya Manusia'
+      section: 'Sumber Daya Manusia',
+      allowedRoles: ['super_admin', 'admin', 'dosen']
     },
     {
       id: 'data-mahasiswa',
@@ -178,7 +181,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: UserCog,
       badge: adminCount,
       badgeColor: 'bg-indigo-100 text-indigo-800',
-      section: 'Sumber Daya Manusia'
+      section: 'Sumber Daya Manusia',
+      allowedRoles: ['super_admin', 'admin', 'dosen']
     },
     {
       id: 'plp-management',
@@ -186,7 +190,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: Microscope,
       badge: plpCount,
       badgeColor: 'bg-emerald-100 text-emerald-800',
-      section: 'Sumber Daya Manusia'
+      section: 'Sumber Daya Manusia',
+      allowedRoles: ['super_admin', 'admin', 'dosen']
+    },
+    {
+      id: 'pembimbing-lapangan-management',
+      label: 'Data Pembimbing Lapangan',
+      icon: UserCheck,
+      badge: pembimbingLapanganCount,
+      badgeColor: 'bg-blue-100 text-blue-800',
+      section: 'Sumber Daya Manusia',
+      allowedRoles: ['super_admin', 'admin', 'dosen', 'eksternal']
     },
     {
       id: 'laboratorium',

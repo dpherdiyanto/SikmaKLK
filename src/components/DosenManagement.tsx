@@ -1,10 +1,9 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Dosen, BidangKeahlianKimia, LabRiset, UserRole } from '../types/sikma';
+import { Dosen, BidangKeahlianKimia, LabRiset, UserRole, Mahasiswa, PengajuanKLK } from '../types/sikma';
 import {
   Users,
   Search,
   Filter,
-  Plus,
   Edit2,
   Trash2,
   Eye,
@@ -32,6 +31,10 @@ interface DosenManagementProps {
   onAddDosen: (dosen: Dosen) => void;
   onUpdateDosen: (dosen: Dosen) => void;
   onDeleteDosen: (id: string) => void;
+  onBulkDeleteDosen?: (ids: string[]) => void;
+  mahasiswaList?: Mahasiswa[];
+  klkList?: PengajuanKLK[];
+  onAssignMahasiswa?: (dosen: Dosen, studentNim: string, studentNama: string) => void;
 }
 
 export const DosenManagement: React.FC<DosenManagementProps> = ({
@@ -39,8 +42,15 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
   currentRole = 'admin',
   onAddDosen,
   onUpdateDosen,
-  onDeleteDosen
+  onDeleteDosen,
+  onBulkDeleteDosen,
+  mahasiswaList = [],
+  klkList = [],
+  onAssignMahasiswa
 }) => {
+  const canBulkDelete = currentRole === 'super_admin' || currentRole === 'admin';
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
   // Filters & State
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedBidang, setSelectedBidang] = useState<string>('Semua');
@@ -99,16 +109,19 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
   // Filtered List
   const filteredDosen = useMemo(() => {
     return dosenList.filter((d) => {
+      if (!d) return false;
+      const q = (searchQuery || '').trim().toLowerCase();
       const matchSearch =
-        d.nama.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        d.nidn.includes(searchQuery) ||
-        d.email.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        d.bidang.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        (d.nama && d.nama.toLowerCase().includes(q)) ||
+        (d.nidn && d.nidn.includes(searchQuery)) ||
+        (d.email && d.email.toLowerCase().includes(q)) ||
+        (d.bidang && d.bidang.toLowerCase().includes(q));
 
       const matchBidang = selectedBidang === 'Semua' || d.bidang === selectedBidang;
       const matchLab = selectedLab === 'Semua' || d.lab === selectedLab;
 
-      return matchSearch && matchBidang && matchLab;
+      return Boolean(matchSearch && matchBidang && matchLab);
     });
   }, [dosenList, searchQuery, selectedBidang, selectedLab]);
 
@@ -121,6 +134,38 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
   const paginatedDosen = useMemo(() => {
     return filteredDosen.slice(startIndex, endIndex);
   }, [filteredDosen, startIndex, endIndex]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => dosenList.some((d) => d.id === id)));
+  }, [dosenList]);
+
+  const filteredIds = useMemo(() => filteredDosen.map((d) => d.id).filter(Boolean), [filteredDosen]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (!canBulkDelete || selectedIds.length === 0) return;
+    const count = selectedIds.length;
+    if (onBulkDeleteDosen) {
+      onBulkDeleteDosen(selectedIds);
+    } else {
+      selectedIds.forEach((id) => onDeleteDosen(id));
+    }
+    setSelectedIds([]);
+    setBulkDeleteConfirmOpen(false);
+    showFlash('success', `${count} data dosen berhasil dihapus.`);
+  };
 
   // Statistics calculation
   const stats = useMemo(() => {
@@ -171,7 +216,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
     if (currentRole === 'mahasiswa') return;
     setEditingDosen(d);
     setFormData({
-      nip: '',
+      nip: d.nip || '',
       nidn: d.nidn,
       nama: d.nama,
       gelar: d.gelar,
@@ -195,12 +240,14 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
 
     const updated: Dosen = {
       ...editingDosen,
-      nip: '',
+      nip: formData.nip || editingDosen.nip || '',
       nidn: formData.nidn,
       nama: formData.nama,
       gelar: formData.gelar,
       bidang: formData.bidang,
       lab: formData.lab,
+      unit: editingDosen.lab !== formData.lab ? formData.lab : editingDosen.unit,
+      jabatan: editingDosen.jabatanAkademik !== formData.jabatanAkademik ? formData.jabatanAkademik : editingDosen.jabatan,
       email: formData.email,
       jabatanAkademik: formData.jabatanAkademik,
       status: formData.status,
@@ -244,7 +291,11 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       jumlahBimbingan: assignTargetDosen.jumlahBimbingan + 1
     };
 
-    onUpdateDosen(updated);
+    if (onAssignMahasiswa) {
+      onAssignMahasiswa(assignTargetDosen, newStudentNim, newStudentName);
+    } else {
+      onUpdateDosen(updated);
+    }
     setIsAssignModalOpen(false);
     setNewStudentName('');
     setNewStudentNim('');
@@ -300,16 +351,6 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
-          {currentRole !== 'mahasiswa' && currentRole !== 'dosen' && (
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              id="btn-tambah-dosen"
-              className="px-4 py-2 bg-[#002B49] text-white rounded-lg text-xs font-bold hover:bg-[#003865] transition-colors shadow-sm flex items-center gap-1.5"
-            >
-              <Plus className="w-4 h-4 text-[#D4AF37]" />
-              <span>Tambah Dosen Baru</span>
-            </button>
-          )}
           <button
             onClick={handlePrintDosen}
             className="px-3.5 py-2 bg-slate-100 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-200 transition-colors border border-slate-300 flex items-center gap-1.5"
@@ -416,6 +457,33 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       {/* Main Content: Table View or Cards View */}
       {viewMode === 'table' ? (
         <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
+          {canBulkDelete && selectedIds.length > 0 && (
+            <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div className="flex items-center gap-2 text-rose-900 font-semibold">
+                <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>
+                  <strong>{selectedIds.length}</strong> data dosen terpilih untuk dihapus
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds([])}
+                  className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+                >
+                  Batal Pilih
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setBulkDeleteConfirmOpen(true)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Hapus Terpilih ({selectedIds.length})</span>
+                </button>
+              </div>
+            </div>
+          )}
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
               <thead className="bg-[#002B49] text-white font-semibold">
@@ -428,7 +496,25 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                   <th className="px-4 py-3.5">Bidang Keahlian (KBK)</th>
                   <th className="px-4 py-3.5">Laboratorium Riset</th>
                   <th className="px-4 py-3.5 text-center">Status Bimbingan</th>
-                  <th className="px-4 py-3.5 text-right">Aksi</th>
+                  <th className="px-4 py-3.5 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      <span>Aksi</span>
+                      {canBulkDelete && filteredIds.length > 0 && (
+                        <label
+                          className="inline-flex items-center gap-1 cursor-pointer select-none"
+                          title="Pilih semua data untuk hapus massal"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={allFilteredSelected}
+                            onChange={toggleSelectAllFiltered}
+                            className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-[#D4AF37]"
+                          />
+                          <span className="text-[10px] font-normal text-slate-200">Semua</span>
+                        </label>
+                      )}
+                    </div>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -541,14 +627,23 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                             )}
 
                             {/* Button Hapus: hanya untuk Admin & Super Admin (tidak bisa diakses / disembunyikan pada Mahasiswa & Dosen) */}
-                            {currentRole !== 'mahasiswa' && currentRole !== 'dosen' && (
-                              <button
-                                onClick={() => handleDelete(d)}
-                                title="Hapus Data"
-                                className="p-1.5 rounded bg-slate-100 hover:bg-rose-600 hover:text-white text-slate-600 transition-colors"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
+                            {canBulkDelete && (
+                              <>
+                                <button
+                                  onClick={() => handleDelete(d)}
+                                  title="Hapus Data"
+                                  className="p-1.5 rounded bg-slate-100 hover:bg-rose-600 hover:text-white text-slate-600 transition-colors"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedIds.includes(d.id)}
+                                  onChange={() => toggleSelectRow(d.id)}
+                                  title="Pilih data untuk hapus massal"
+                                  className="w-3.5 h-3.5 ml-1 rounded border-slate-300 cursor-pointer accent-rose-600"
+                                />
+                              </>
                             )}
                           </div>
                         </td>
@@ -781,14 +876,23 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
                       )}
-                      {currentRole !== 'mahasiswa' && currentRole !== 'dosen' && (
-                        <button
-                          onClick={() => handleDelete(d)}
-                          className="p-1.5 rounded hover:bg-rose-100 text-rose-700 cursor-pointer"
-                          title="Hapus"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                      {canBulkDelete && (
+                        <>
+                          <button
+                            onClick={() => handleDelete(d)}
+                            className="p-1.5 rounded hover:bg-rose-100 text-rose-700 cursor-pointer"
+                            title="Hapus"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(d.id)}
+                            onChange={() => toggleSelectRow(d.id)}
+                            title="Pilih data untuk hapus massal"
+                            className="w-3.5 h-3.5 ml-1 rounded border-slate-300 cursor-pointer accent-rose-600"
+                          />
+                        </>
                       )}
                     </div>
                   </div>
@@ -1460,6 +1564,37 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Massal */}
+      {canBulkDelete && bulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm border border-slate-200 p-5 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-900">Konfirmasi Hapus Massal Data Dosen</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Apakah Anda yakin ingin menghapus <strong>{selectedIds.length}</strong> data dosen yang dipilih? Tindakan ini tidak dapat dibatalkan.
+            </p>
+            <div className="flex justify-center gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Hapus Semua Terpilih
+              </button>
+            </div>
           </div>
         </div>
       )}

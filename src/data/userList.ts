@@ -185,7 +185,7 @@ export const INITIAL_USER_ACCOUNTS: UserAccountItem[] = [
     password: 'Mhs#2024',
     nama: 'Denny Caknan',
     role: 'mahasiswa',
-    identifier: 'NIM. 215090200111012',
+    identifier: 'NIM. 235090200111010',
     email: 'denny.caknan@student.ub.ac.id',
     avatarText: 'DC',
     unit: 'Program Studi S1 Kimia FMIPA (Angkatan 2021)',
@@ -194,5 +194,21 @@ export const INITIAL_USER_ACCOUNTS: UserAccountItem[] = [
     tanggalDibuat: '2023-08-20',
     terakhirLogin: 'Hari ini, 09:15 WIB',
     noHp: '0812-3456-7890'
+  },
+  {
+    id: 'usr-011',
+    username: 'budi.sugiono',
+    password: 'Mhs#2024',
+    nama: 'Budi Sugiono',
+    role: 'mahasiswa',
+    identifier: 'NIM. 225090207111088',
+    email: 'budi.sugiono@student.ub.ac.id',
+    avatarText: 'BS',
+    unit: 'Program Studi S1 Kimia FMIPA (Angkatan 2022)',
+    jabatan: 'Mahasiswa Aktif Semester 5 (KLK / PKL)',
+    status: 'Aktif',
+    tanggalDibuat: '2024-01-10',
+    terakhirLogin: 'Hari ini, 09:20 WIB',
+    noHp: '0812-9876-5432'
   }
 ];

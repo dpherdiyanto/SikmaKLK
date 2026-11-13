@@ -16,7 +16,8 @@ import {
   PengajuanKLK,
   LogbookMingguanKLK,
   AdminStaff,
-  PLPStaff
+  PLPStaff,
+  PembimbingLapanganStaff
 } from './types/sikma';
 import {
   INITIAL_DOSEN,
@@ -33,15 +34,23 @@ import {
 } from './data/mockData';
 import { INITIAL_ADMIN_LIST } from './data/adminList';
 import { INITIAL_PLP_LIST } from './data/plpList';
+import { INITIAL_PEMBIMBING_LAPANGAN_LIST } from './data/pembimbingLapanganList';
 import { INITIAL_MAHASISWA_LIST } from './data/mahasiswaList';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS } from './data/userList';
-import { syncSdmToUserAccounts } from './utils/syncUserAndSdm';
+import {
+  syncSdmToUserAccounts,
+  syncBidirectionalUsersAndSdm,
+  isNameMatch,
+  isIdentifierMatch,
+  isUserMatchingEntity
+} from './utils/syncUserAndSdm';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { DosenManagement } from './components/DosenManagement';
 import { MahasiswaManagement } from './components/MahasiswaManagement';
 import { AdminManagement } from './components/AdminManagement';
 import { PlpManagement } from './components/PlpManagement';
+import { PembimbingLapanganManagement } from './components/PembimbingLapanganManagement';
 import { AkademikView } from './components/AkademikView';
 import { SkripsiLaboratoriumView } from './components/SkripsiLaboratoriumView';
 import { SkripsiView } from './components/SkripsiView';
@@ -101,8 +110,8 @@ export const syncKlkWithMahasiswaList = (
     const matched = mhsList.find(
       (m) =>
         m.id === k.mahasiswaId ||
-        (cleanNim && m.nim.replace(/\D/g, '') === cleanNim) ||
-        (cleanNama && m.nama.trim().toLowerCase() === cleanNama)
+        (cleanNim && m.nim && m.nim.replace(/\D/g, '') === cleanNim) ||
+        (cleanNama && m.nama && m.nama.trim().toLowerCase() === cleanNama)
     );
 
     if (matched) {
@@ -111,7 +120,9 @@ export const syncKlkWithMahasiswaList = (
         mahasiswaId: matched.id,
         mahasiswaNama: matched.nama,
         nim: matched.nim,
-        semester: matched.semester || k.semester
+        semester: matched.semester || k.semester,
+        dpaNama: matched.dosenPANama || k.dpaNama,
+        dpaId: matched.dosenPAId || k.dpaId
       };
     }
     return k;
@@ -132,8 +143,12 @@ export default function App() {
   // Persistence State
   const [dosenList, setDosenList] = useState<Dosen[]>(() => {
     const saved = localStorage.getItem('sikma_dosen_data');
-    const raw: Dosen[] = saved ? JSON.parse(saved) : INITIAL_DOSEN;
-    return raw.map((d) => ({ ...d, nip: '' }));
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {}
+    }
+    return INITIAL_DOSEN.map((d) => ({ ...d, nip: '' }));
   });
 
   const [student, setStudent] = useState<Mahasiswa>(() => {
@@ -144,9 +159,23 @@ export default function App() {
   const [mahasiswaList, setMahasiswaList] = useState<Mahasiswa[]>(() => {
     try {
       const saved = localStorage.getItem('sikma_mahasiswa_list');
-      return saved ? JSON.parse(saved) : INITIAL_MAHASISWA_LIST;
+      const seededFlag = localStorage.getItem('sikma_mhs_initial_seeded_v1');
+      if (saved) {
+        const list: Mahasiswa[] = JSON.parse(saved);
+        if (!seededFlag) {
+          for (const initItem of INITIAL_MAHASISWA_LIST) {
+            if (!list.some((m) => m.id === initItem.id || m.nim === initItem.nim)) {
+              list.push(initItem);
+            }
+          }
+          localStorage.setItem('sikma_mhs_initial_seeded_v1', 'true');
+        }
+        return list.filter((m) => m.nama?.toLowerCase().trim() !== 'sherina');
+      }
+      localStorage.setItem('sikma_mhs_initial_seeded_v1', 'true');
+      return INITIAL_MAHASISWA_LIST.filter((m) => m.nama?.toLowerCase().trim() !== 'sherina');
     } catch {
-      return INITIAL_MAHASISWA_LIST;
+      return INITIAL_MAHASISWA_LIST.filter((m) => m.nama?.toLowerCase().trim() !== 'sherina');
     }
   });
 
@@ -166,28 +195,59 @@ export default function App() {
   });
 
   const [klkList, setKlkList] = useState<PengajuanKLK[]>(() => {
-    const saved = localStorage.getItem('sikma_klk_data');
-    let rawList: PengajuanKLK[] = INITIAL_KLK;
-    if (saved) {
-      try {
-        rawList = JSON.parse(saved);
-      } catch {
-        rawList = INITIAL_KLK;
-      }
-    }
-    return syncKlkWithMahasiswaList(rawList, INITIAL_MAHASISWA_LIST);
+    try {
+      localStorage.setItem('sikma_klk_data', JSON.stringify([]));
+      localStorage.removeItem('sikma_klk_verified_students');
+      localStorage.removeItem('sikma_klk_unblocked_nims');
+      localStorage.removeItem('sikma_klk_form_submitted_id');
+    } catch {}
+    return [];
   });
 
   const [adminList, setAdminList] = useState<AdminStaff[]>(() => {
     const saved = localStorage.getItem('sikma_admin_data');
-    const raw: AdminStaff[] = saved ? JSON.parse(saved) : INITIAL_ADMIN_LIST;
-    return raw.map((a) => ({ ...a, nip: '' }));
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {}
+    }
+    return INITIAL_ADMIN_LIST.map((a) => ({ ...a, nip: '' }));
   });
 
   const [plpList, setPlpList] = useState<PLPStaff[]>(() => {
     const saved = localStorage.getItem('sikma_plp_data');
-    const raw: PLPStaff[] = saved ? JSON.parse(saved) : INITIAL_PLP_LIST;
-    return raw.map((p) => ({ ...p, nip: '' }));
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch {}
+    }
+    return INITIAL_PLP_LIST.map((p) => ({ ...p, nip: '' }));
+  });
+
+  const [pembimbingLapanganList, setPembimbingLapanganList] = useState<PembimbingLapanganStaff[]>(() => {
+    try {
+      const saved = localStorage.getItem('sikma_pembimbing_lapangan_data');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.filter((p) => p && typeof p === 'object' && typeof p.nama === 'string' && p.nama.trim().length > 0);
+        }
+      }
+    } catch {}
+    return INITIAL_PEMBIMBING_LAPANGAN_LIST;
+  });
+
+  const [userList, setUserList] = useState<UserAccountItem[]>(() => {
+    try {
+      const saved = localStorage.getItem('sikma_user_accounts');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.filter((u) => u.nama?.toLowerCase().trim() !== 'sherina' && u.username?.toLowerCase().trim() !== 'sherina');
+        }
+      }
+    } catch {}
+    return INITIAL_USER_ACCOUNTS.filter((u) => u.nama?.toLowerCase().trim() !== 'sherina' && u.username?.toLowerCase().trim() !== 'sherina');
   });
 
   // Save changes to localStorage
@@ -202,6 +262,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('sikma_plp_data', JSON.stringify(plpList));
   }, [plpList]);
+
+  useEffect(() => {
+    localStorage.setItem('sikma_pembimbing_lapangan_data', JSON.stringify(pembimbingLapanganList));
+  }, [pembimbingLapanganList]);
 
   useEffect(() => {
     localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(mahasiswaList));
@@ -222,6 +286,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('sikma_klk_data', JSON.stringify(klkList));
   }, [klkList]);
+
+  useEffect(() => {
+    localStorage.setItem('sikma_user_accounts', JSON.stringify(userList));
+  }, [userList]);
 
   // Guard: if role is restricted for active tab, redirect
   useEffect(() => {
@@ -255,155 +323,455 @@ export default function App() {
         }
       }
     }
+    if (currentRole === 'eksternal') {
+      const allowedEksternalTabs: ActiveTab[] = [
+        'klk',
+        'pembimbing-lapangan-management',
+        'profile',
+        'pengumuman',
+        'instansi',
+        'config-instansi'
+      ];
+      if (!allowedEksternalTabs.includes(activeTab)) {
+        setActiveTab('klk');
+      }
+    }
   }, [currentRole, activeTab]);
 
-  // Helper sinkronisasi dua arah SDM -> Akun User (Config -> User)
-  const syncUserAccountsFromSdm = (
-    dList: Dosen[],
-    mList: Mahasiswa[],
-    aList: AdminStaff[],
-    pList: PLPStaff[]
+  // Helper sinkronisasi terpadu seluruh Modul: User, Dosen, Mahasiswa, Admin, PLP, Pembimbing Lapangan, KLK, Logbook, Seminar, & Surat
+  const syncAllModules = (
+    dList: Dosen[] = dosenList,
+    mList: Mahasiswa[] = mahasiswaList,
+    aList: AdminStaff[] = adminList,
+    pList: PLPStaff[] = plpList,
+    kList: PengajuanKLK[] = klkList,
+    uList?: UserAccountItem[],
+    pbList: PembimbingLapanganStaff[] = pembimbingLapanganList,
+    logList?: LogbookLabItem[],
+    semList?: JadwalSeminar[],
+    surList?: SuratPengajuan[]
   ) => {
+    // 0. Sinkronisasi dua arah menyeluruh: jika ada penambahan/perubahan di User Accounts (Config -> User),
+    // otomatis daftarkan ke SDM (Dosen, Mahasiswa, Admin, PLP, Pembimbing Lapangan). Sebaliknya jika ada entitas baru di SDM,
+    // otomatis buatkan User Account.
+    const baseUsers = uList || userList;
+    const bidir = syncBidirectionalUsersAndSdm(baseUsers, dList, mList, aList, pList, pbList);
+    const activeDosen = bidir.syncedDosen;
+    const activeMahasiswa = bidir.syncedMahasiswa;
+    const activeAdmin = bidir.syncedAdmin;
+    const activePlp = bidir.syncedPlp;
+    const activePembimbing = bidir.syncedPembimbingLapangan;
+    const activeUsers = bidir.syncedUsers;
+
+    // 1. Update DPA pada Mahasiswa jika nama/gelar Dosen diperbarui
+    const syncedMahasiswa = activeMahasiswa.map((m) => {
+      if (!m.dosenPANama && !m.dosenPAId) return m;
+      const matchedDosen = activeDosen.find(
+        (d) =>
+          (m.dosenPAId && d.id === m.dosenPAId) ||
+          (d.nip && m.dosenPANip && d.nip.replace(/\D/g, '') === m.dosenPANip.replace(/\D/g, '')) ||
+          (m.dosenPANama && isNameMatch(d.nama, m.dosenPANama))
+      );
+      if (matchedDosen) {
+        const fullDosenNama = `${matchedDosen.nama}${matchedDosen.gelar ? ', ' + matchedDosen.gelar : ''}`;
+        return {
+          ...m,
+          dosenPAId: matchedDosen.id,
+          dosenPANama: fullDosenNama,
+          dosenPANip: matchedDosen.nip || matchedDosen.nidn || m.dosenPANip
+        };
+      }
+      return m;
+    });
+
+    // 2. Sinkronisasi KLK dengan Data Mahasiswa & Data Dosen
+    const syncedKlk = syncKlkWithMahasiswaList(kList, syncedMahasiswa).map((k) => {
+      let updated = { ...k };
+      // Sync student DPA info into KLK
+      const studentMhs = syncedMahasiswa.find(
+        (m) =>
+          m.id === k.mahasiswaId ||
+          (k.nim && m.nim && m.nim.replace(/\D/g, '') === (k.nim || '').replace(/\D/g, '')) ||
+          (k.mahasiswaNama && isNameMatch(m.nama, k.mahasiswaNama))
+      );
+      if (studentMhs) {
+        updated.dpaNama = studentMhs.dosenPANama || updated.dpaNama;
+        updated.dpaId = studentMhs.dosenPAId || updated.dpaId;
+      }
+
+      // Sync Dosen Pembimbing KLK name if lecturer exists in activeDosen
+      if (k.dosenPembimbingKLK && !k.dosenPembimbingKLK.includes('Belum Ditetapkan')) {
+        const matchedDosen = activeDosen.find((d) => isNameMatch(d.nama, k.dosenPembimbingKLK));
+        if (matchedDosen) {
+          const fullDosenNama = `${matchedDosen.nama}${matchedDosen.gelar ? ', ' + matchedDosen.gelar : ''}`;
+          updated.dosenPembimbingKLK = fullDosenNama;
+        }
+      }
+      return updated;
+    });
+
+    // 3. Update student state jika profil mahasiswa aktif berubah atau terhapus
+    if (currentUser && currentUser.role === 'mahasiswa') {
+      const cleanNim = (currentUser.identifier || '').replace(/\D/g, '');
+      const matchedMhs = syncedMahasiswa.find(
+        (m) =>
+          m.id === currentUser.id ||
+          (cleanNim && m.nim && m.nim.replace(/\D/g, '') === cleanNim) ||
+          isNameMatch(m.nama, currentUser.nama) ||
+          (currentUser.username && isNameMatch(m.nama, currentUser.username))
+      );
+      if (matchedMhs) {
+        setStudent(matchedMhs);
+        try {
+          localStorage.setItem('sikma_student_data', JSON.stringify(matchedMhs));
+        } catch {}
+      }
+    } else if (student) {
+      const matchedMhs = syncedMahasiswa.find(
+        (m) => m.id === student.id || (m.nim && student.nim && m.nim.replace(/\D/g, '') === student.nim.replace(/\D/g, ''))
+      );
+      if (matchedMhs) {
+        setStudent(matchedMhs);
+        try {
+          localStorage.setItem('sikma_student_data', JSON.stringify(matchedMhs));
+        } catch {}
+      } else if (syncedMahasiswa.length > 0) {
+        setStudent(syncedMahasiswa[0]);
+        try {
+          localStorage.setItem('sikma_student_data', JSON.stringify(syncedMahasiswa[0]));
+        } catch {}
+      }
+    }
+
+    // 4. Update logbooks, seminarList, dan suratList jika ada
+    const nextLogbooks = logList !== undefined ? logList : logbooks;
+    const nextSeminar = semList !== undefined ? semList : seminarList;
+    const nextSurat = surList !== undefined ? surList : suratList;
+
+    // 5. Update state & localStorage secara atomik
+    setDosenList(activeDosen);
+    setMahasiswaList(syncedMahasiswa);
+    setAdminList(activeAdmin);
+    setPlpList(activePlp);
+    setPembimbingLapanganList(activePembimbing);
+    setKlkList(syncedKlk);
+    setUserList(activeUsers);
+    if (logList !== undefined) setLogbooks(nextLogbooks);
+    if (semList !== undefined) setSeminarList(nextSeminar);
+    if (surList !== undefined) setSuratList(nextSurat);
+
+    // 6. Update currentUser jika profil login berubah
+    if (currentUser) {
+      const updatedAuth = activeUsers.find(
+        (u) => u.id === currentUser.id || u.username === currentUser.username
+      );
+      if (
+        updatedAuth &&
+        (updatedAuth.nama !== currentUser.nama ||
+          updatedAuth.email !== currentUser.email ||
+          updatedAuth.role !== currentUser.role ||
+          updatedAuth.identifier !== currentUser.identifier ||
+          updatedAuth.unit !== currentUser.unit ||
+          updatedAuth.jabatan !== currentUser.jabatan ||
+          updatedAuth.avatarText !== currentUser.avatarText)
+      ) {
+        const nextAuth: AuthUser = {
+          ...currentUser,
+          nama: updatedAuth.nama,
+          email: updatedAuth.email,
+          role: updatedAuth.role,
+          identifier: updatedAuth.identifier,
+          unit: updatedAuth.unit,
+          jabatan: updatedAuth.jabatan,
+          avatarText: updatedAuth.avatarText
+        };
+        setCurrentUser(nextAuth);
+        try {
+          localStorage.setItem('sikma_auth_user', JSON.stringify(nextAuth));
+        } catch {}
+      }
+    }
+
     try {
-      const savedUsersRaw = localStorage.getItem('sikma_user_accounts');
-      const currentUsers: UserAccountItem[] = savedUsersRaw
-        ? JSON.parse(savedUsersRaw)
-        : INITIAL_USER_ACCOUNTS;
-      const res = syncSdmToUserAccounts(currentUsers, dList, mList, aList, pList);
-      localStorage.setItem('sikma_user_accounts', JSON.stringify(res.updatedUsers));
+      localStorage.setItem('sikma_dosen_data', JSON.stringify(activeDosen));
+      localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(syncedMahasiswa));
+      localStorage.setItem('sikma_admin_data', JSON.stringify(activeAdmin));
+      localStorage.setItem('sikma_plp_data', JSON.stringify(activePlp));
+      localStorage.setItem('sikma_pembimbing_lapangan_data', JSON.stringify(activePembimbing));
+      localStorage.setItem('sikma_klk_data', JSON.stringify(syncedKlk));
+      localStorage.setItem('sikma_user_accounts', JSON.stringify(activeUsers));
+      if (logList !== undefined) localStorage.setItem('sikma_logbook_data', JSON.stringify(nextLogbooks));
+      if (semList !== undefined) localStorage.setItem('sikma_seminar_data', JSON.stringify(nextSeminar));
+      if (surList !== undefined) localStorage.setItem('sikma_surat_data', JSON.stringify(nextSurat));
     } catch (e) {
-      console.error('Error syncing user accounts from SDM', e);
+      console.error('Error persisting synced data:', e);
     }
   };
 
   // Sinkronisasi otomatis saat pertama kali aplikasi dimuat
   useEffect(() => {
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, adminList, plpList);
+    syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList);
   }, []);
 
   // Handlers for Dosen
   const handleAddDosen = (newDosen: Dosen) => {
     const updated = [newDosen, ...dosenList];
-    setDosenList(updated);
-    try {
-      localStorage.setItem('sikma_dosen_data', JSON.stringify(updated));
-    } catch {}
-    syncUserAccountsFromSdm(updated, mahasiswaList, adminList, plpList);
+    syncAllModules(updated, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleUpdateDosen = (updated: Dosen) => {
     const next = dosenList.map((d) => (d.id === updated.id ? updated : d));
-    setDosenList(next);
-    try {
-      localStorage.setItem('sikma_dosen_data', JSON.stringify(next));
-    } catch {}
-    syncUserAccountsFromSdm(next, mahasiswaList, adminList, plpList);
+    syncAllModules(next, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleDeleteDosen = (id: string) => {
-    const next = dosenList.filter((d) => d.id !== id);
-    setDosenList(next);
-    try {
-      localStorage.setItem('sikma_dosen_data', JSON.stringify(next));
-    } catch {}
-    syncUserAccountsFromSdm(next, mahasiswaList, adminList, plpList);
+    const targetDosen = dosenList.find((d) => d.id === id);
+    const nextDosen = dosenList.filter((d) => d.id !== id);
+    let nextUsers = userList;
+    if (targetDosen) {
+      nextUsers = userList.filter(
+        (u) =>
+          !(
+            u.role === 'dosen' &&
+            (isUserMatchingEntity(u, targetDosen) ||
+              isNameMatch(u.nama, targetDosen.nama) ||
+              isIdentifierMatch(u.identifier, targetDosen.nip || targetDosen.nidn))
+          )
+      );
+    }
+    syncAllModules(nextDosen, mahasiswaList, adminList, plpList, klkList, nextUsers, pembimbingLapanganList);
+  };
+
+  const handleBulkDeleteDosen = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const targets = dosenList.filter((d) => idSet.has(d.id));
+    const nextDosen = dosenList.filter((d) => !idSet.has(d.id));
+    const nextUsers = userList.filter(
+      (u) =>
+        !(
+          u.role === 'dosen' &&
+          targets.some(
+            (targetDosen) =>
+              isUserMatchingEntity(u, targetDosen) ||
+              isNameMatch(u.nama, targetDosen.nama) ||
+              isIdentifierMatch(u.identifier, targetDosen.nip || targetDosen.nidn)
+          )
+        )
+    );
+    syncAllModules(nextDosen, mahasiswaList, adminList, plpList, klkList, nextUsers, pembimbingLapanganList);
   };
 
   // Handlers for Admin
   const handleAddAdmin = (newAdmin: AdminStaff) => {
     const updated = [newAdmin, ...adminList];
-    setAdminList(updated);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, updated, plpList);
+    syncAllModules(dosenList, mahasiswaList, updated, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleUpdateAdmin = (updated: AdminStaff) => {
     const next = adminList.map((a) => (a.id === updated.id ? updated : a));
-    setAdminList(next);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, next, plpList);
+    syncAllModules(dosenList, mahasiswaList, next, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleDeleteAdmin = (id: string) => {
-    const next = adminList.filter((a) => a.id !== id);
-    setAdminList(next);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, next, plpList);
+    const targetAdmin = adminList.find((a) => a.id === id);
+    const nextAdmin = adminList.filter((a) => a.id !== id);
+    let nextUsers = userList;
+    if (targetAdmin) {
+      nextUsers = userList.filter(
+        (u) =>
+          !(
+            (u.role === 'admin' || u.role === 'super_admin') &&
+            (isUserMatchingEntity(u, targetAdmin) ||
+              isNameMatch(u.nama, targetAdmin.nama) ||
+              isIdentifierMatch(u.identifier, targetAdmin.nip))
+          )
+      );
+    }
+    syncAllModules(dosenList, mahasiswaList, nextAdmin, plpList, klkList, nextUsers, pembimbingLapanganList);
+  };
+
+  const handleBulkDeleteAdmin = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const targets = adminList.filter((a) => idSet.has(a.id));
+    const nextAdmin = adminList.filter((a) => !idSet.has(a.id));
+    const nextUsers = userList.filter(
+      (u) =>
+        !(
+          (u.role === 'admin' || u.role === 'super_admin') &&
+          targets.some(
+            (targetAdmin) =>
+              isUserMatchingEntity(u, targetAdmin) ||
+              isNameMatch(u.nama, targetAdmin.nama) ||
+              isIdentifierMatch(u.identifier, targetAdmin.nip)
+          )
+        )
+    );
+    syncAllModules(dosenList, mahasiswaList, nextAdmin, plpList, klkList, nextUsers, pembimbingLapanganList);
   };
 
   // Handlers for Mahasiswa
   const handleAddMahasiswa = (newMhs: Mahasiswa) => {
     const updated = [newMhs, ...mahasiswaList];
-    setMahasiswaList(updated);
-    try {
-      localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(updated));
-    } catch {}
-    syncUserAccountsFromSdm(dosenList, updated, adminList, plpList);
+    syncAllModules(dosenList, updated, adminList, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleUpdateMahasiswa = (updatedMhs: Mahasiswa) => {
     const updated = mahasiswaList.map((m) => (m.id === updatedMhs.id ? updatedMhs : m));
-    setMahasiswaList(updated);
-    try {
-      localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(updated));
-    } catch {}
-
-    // Sinkronkan data KLK mahasiswa saat data mahasiswa diperbarui
-    setKlkList((prevKlk) => {
-      const syncedKlk = prevKlk.map((k) => {
-        if (
-          k.mahasiswaId === updatedMhs.id ||
-          (k.nim && updatedMhs.nim && k.nim.replace(/\D/g, '') === updatedMhs.nim.replace(/\D/g, '')) ||
-          (k.mahasiswaNama && updatedMhs.nama && k.mahasiswaNama.trim().toLowerCase() === updatedMhs.nama.trim().toLowerCase())
-        ) {
-          return {
-            ...k,
-            mahasiswaId: updatedMhs.id,
-            mahasiswaNama: updatedMhs.nama,
-            nim: updatedMhs.nim,
-            semester: updatedMhs.semester || k.semester
-          };
-        }
-        return k;
-      });
-      try {
-        localStorage.setItem('sikma_klk_data', JSON.stringify(syncedKlk));
-      } catch {}
-      return syncedKlk;
-    });
-
     if (student.id === updatedMhs.id || student.nim === updatedMhs.nim) {
       setStudent(updatedMhs);
       try {
         localStorage.setItem('sikma_student_data', JSON.stringify(updatedMhs));
       } catch {}
     }
-    syncUserAccountsFromSdm(dosenList, updated, adminList, plpList);
+    syncAllModules(dosenList, updated, adminList, plpList, klkList, userList, pembimbingLapanganList);
   };
 
   const handleDeleteMahasiswa = (id: string) => {
-    const updated = mahasiswaList.filter((m) => m.id !== id);
-    setMahasiswaList(updated);
-    try {
-      localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(updated));
-    } catch {}
-    syncUserAccountsFromSdm(dosenList, updated, adminList, plpList);
+    const targetMhs = mahasiswaList.find((m) => m.id === id);
+    const nextMhs = mahasiswaList.filter((m) => m.id !== id);
+    let nextUsers = userList;
+    let nextKlk = klkList;
+    if (targetMhs) {
+      const cleanNim = (targetMhs.nim || '').replace(/\D/g, '');
+      nextUsers = userList.filter(
+        (u) =>
+          !(
+            u.role === 'mahasiswa' &&
+            (isUserMatchingEntity(u, targetMhs) ||
+              isNameMatch(u.nama, targetMhs.nama) ||
+              isIdentifierMatch(u.identifier, targetMhs.nim))
+          )
+      );
+      nextKlk = klkList.filter(
+        (k) =>
+          k.mahasiswaId !== id &&
+          (!cleanNim || (k.nim && k.nim.replace(/\D/g, '') !== cleanNim))
+      );
+    }
+    syncAllModules(dosenList, nextMhs, adminList, plpList, nextKlk, nextUsers, pembimbingLapanganList);
+  };
+
+  const handleBulkDeleteMahasiswa = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const targets = mahasiswaList.filter((m) => idSet.has(m.id));
+    const targetNims = new Set(targets.map((m) => (m.nim || '').replace(/\D/g, '')).filter(Boolean));
+    const nextMhs = mahasiswaList.filter((m) => !idSet.has(m.id));
+    const nextUsers = userList.filter(
+      (u) =>
+        !(
+          u.role === 'mahasiswa' &&
+          targets.some(
+            (targetMhs) =>
+              isUserMatchingEntity(u, targetMhs) ||
+              isNameMatch(u.nama, targetMhs.nama) ||
+              isIdentifierMatch(u.identifier, targetMhs.nim)
+          )
+        )
+    );
+    const nextKlk = klkList.filter(
+      (k) =>
+        !idSet.has(k.mahasiswaId) &&
+        !(k.nim && targetNims.has(k.nim.replace(/\D/g, '')))
+    );
+    syncAllModules(dosenList, nextMhs, adminList, plpList, nextKlk, nextUsers, pembimbingLapanganList);
   };
 
   // Handlers for PLP
   const handleAddPLP = (newPLP: PLPStaff) => {
     const updated = [newPLP, ...plpList];
-    setPlpList(updated);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, adminList, updated);
+    syncAllModules(dosenList, mahasiswaList, adminList, updated, klkList, userList, pembimbingLapanganList);
   };
 
   const handleUpdatePLP = (updated: PLPStaff) => {
     const next = plpList.map((p) => (p.id === updated.id ? updated : p));
-    setPlpList(next);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, adminList, next);
+    syncAllModules(dosenList, mahasiswaList, adminList, next, klkList, userList, pembimbingLapanganList);
   };
 
   const handleDeletePLP = (id: string) => {
-    const next = plpList.filter((p) => p.id !== id);
-    setPlpList(next);
-    syncUserAccountsFromSdm(dosenList, mahasiswaList, adminList, next);
+    const targetPlp = plpList.find((p) => p.id === id);
+    const nextPlp = plpList.filter((p) => p.id !== id);
+    let nextUsers = userList;
+    if (targetPlp) {
+      nextUsers = userList.filter(
+        (u) =>
+          !(
+            (u.role === 'admin' || u.role === 'super_admin') &&
+            (isUserMatchingEntity(u, targetPlp) ||
+              isNameMatch(u.nama, targetPlp.nama) ||
+              isIdentifierMatch(u.identifier, targetPlp.nip))
+          )
+      );
+    }
+    syncAllModules(dosenList, mahasiswaList, adminList, nextPlp, klkList, nextUsers, pembimbingLapanganList);
+  };
+
+  const handleBulkDeletePLP = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const targets = plpList.filter((p) => idSet.has(p.id));
+    const nextPlp = plpList.filter((p) => !idSet.has(p.id));
+    const nextUsers = userList.filter(
+      (u) =>
+        !(
+          (u.role === 'admin' || u.role === 'super_admin') &&
+          targets.some(
+            (targetPlp) =>
+              isUserMatchingEntity(u, targetPlp) ||
+              isNameMatch(u.nama, targetPlp.nama) ||
+              isIdentifierMatch(u.identifier, targetPlp.nip)
+          )
+        )
+    );
+    syncAllModules(dosenList, mahasiswaList, adminList, nextPlp, klkList, nextUsers, pembimbingLapanganList);
+  };
+
+  // Handlers for Pembimbing Lapangan
+  const handleUpdatePembimbingLapangan = (updated: PembimbingLapanganStaff) => {
+    const next = pembimbingLapanganList.map((p) => (p.id === updated.id ? updated : p));
+    syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, userList, next);
+  };
+
+  const handleDeletePembimbingLapangan = (id: string) => {
+    const targetPbl = pembimbingLapanganList.find((p) => p.id === id);
+    const nextPbl = pembimbingLapanganList.filter((p) => p.id !== id);
+    let nextUsers = userList;
+    if (targetPbl) {
+      nextUsers = userList.filter(
+        (u) =>
+          !(
+            (u.role === 'eksternal' ||
+              (u.jabatan && u.jabatan.toLowerCase().includes('pembimbing lapangan'))) &&
+            (isUserMatchingEntity(u, targetPbl) ||
+              isNameMatch(u.nama, targetPbl.nama) ||
+              isIdentifierMatch(u.identifier, targetPbl.idMitra))
+          )
+      );
+    }
+    syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, nextUsers, nextPbl);
+  };
+
+  const handleBulkDeletePembimbingLapangan = (ids: string[]) => {
+    if (!ids || ids.length === 0) return;
+    const idSet = new Set(ids);
+    const targets = pembimbingLapanganList.filter((p) => idSet.has(p.id));
+    const nextPbl = pembimbingLapanganList.filter((p) => !idSet.has(p.id));
+    const nextUsers = userList.filter(
+      (u) =>
+        !(
+          (u.role === 'eksternal' ||
+            (u.jabatan && u.jabatan.toLowerCase().includes('pembimbing lapangan'))) &&
+          targets.some(
+            (targetPbl) =>
+              isUserMatchingEntity(u, targetPbl) ||
+              isNameMatch(u.nama, targetPbl.nama) ||
+              isIdentifierMatch(u.identifier, targetPbl.idMitra)
+          )
+        )
+    );
+    syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, nextUsers, nextPbl);
   };
 
   // Handlers for Logbook
@@ -445,7 +813,21 @@ export default function App() {
 
   // Handlers for KLK
   const handleAddKLK = (newKLK: PengajuanKLK) => {
-    setKlkList((prev) => [newKLK, ...prev]);
+    setKlkList((prev) => {
+      const cleanNim = (newKLK.nim || '').replace(/\D/g, '');
+      const isDuplicate = prev.some(
+        (k) =>
+          k.id === newKLK.id ||
+          (cleanNim &&
+            (k.nim || '').replace(/\D/g, '') === cleanNim &&
+            k.waktuSubmit === newKLK.waktuSubmit &&
+            k.namaMitra === newKLK.namaMitra)
+      );
+      if (isDuplicate) {
+        return prev;
+      }
+      return [newKLK, ...prev];
+    });
   };
 
   const handleUpdateKLK = (updatedKlk: PengajuanKLK) => {
@@ -552,6 +934,29 @@ export default function App() {
     );
   };
 
+  const handleResetAllKLK = () => {
+    setKlkList([]);
+    try {
+      localStorage.setItem('sikma_klk_data', JSON.stringify([]));
+      localStorage.removeItem('sikma_klk_verified_students');
+      localStorage.removeItem('sikma_klk_unblocked_nims');
+      localStorage.removeItem('sikma_klk_verify_lock_clean_v1');
+      localStorage.removeItem('sikma_klk_form_submitted_id');
+    } catch {}
+    syncAllModules(dosenList, mahasiswaList, adminList, plpList, []);
+  };
+
+  const handleDeleteKLK = (id: string) => {
+    setKlkList((prev) => {
+      const next = prev.filter((k) => k.id !== id);
+      try {
+        localStorage.setItem('sikma_klk_data', JSON.stringify(next));
+      } catch {}
+      syncAllModules(dosenList, mahasiswaList, adminList, plpList, next);
+      return next;
+    });
+  };
+
   const pendingLogbooksCount = logbooks.filter(
     (l) => l.statusVerifikasi === 'Menunggu Verifikasi'
   ).length;
@@ -560,7 +965,43 @@ export default function App() {
   const handleLoginSuccess = (user: AuthUser) => {
     setCurrentUser(user);
     localStorage.setItem('sikma_auth_user', JSON.stringify(user));
+    if (user.role === 'mahasiswa') {
+      const cleanNim = (user.identifier || '').replace(/\D/g, '');
+      const matchedMhs = mahasiswaList.find(
+        (m) =>
+          m.id === user.id ||
+          (cleanNim && m.nim.replace(/\D/g, '') === cleanNim) ||
+          isNameMatch(m.nama, user.nama) ||
+          (user.username && isNameMatch(m.nama, user.username))
+      );
+      if (matchedMhs) {
+        setStudent(matchedMhs);
+        try {
+          localStorage.setItem('sikma_student_data', JSON.stringify(matchedMhs));
+        } catch {}
+      }
+    }
   };
+
+  // Pastikan data mahasiswa aktif sinkron dengan akun user yang sedang aktif
+  useEffect(() => {
+    if (currentUser && currentUser.role === 'mahasiswa') {
+      const cleanNim = (currentUser.identifier || '').replace(/\D/g, '');
+      const matchedMhs = mahasiswaList.find(
+        (m) =>
+          m.id === currentUser.id ||
+          (cleanNim && m.nim.replace(/\D/g, '') === cleanNim) ||
+          isNameMatch(m.nama, currentUser.nama) ||
+          (currentUser.username && isNameMatch(m.nama, currentUser.username))
+      );
+      if (matchedMhs && (student.id !== matchedMhs.id || student.nim !== matchedMhs.nim || student.nama !== matchedMhs.nama)) {
+        setStudent(matchedMhs);
+        try {
+          localStorage.setItem('sikma_student_data', JSON.stringify(matchedMhs));
+        } catch {}
+      }
+    }
+  }, [currentUser, mahasiswaList, student]);
 
   const handleLogout = () => {
     setCurrentUser(null);
@@ -588,12 +1029,18 @@ export default function App() {
         {/* Navigation Sidebar */}
         <Sidebar
           activeTab={activeTab}
-          onTabChange={setActiveTab}
+          onTabChange={(tab) => {
+            setActiveTab(tab);
+            if (typeof window !== 'undefined') {
+              window.scrollTo({ top: 0, behavior: 'auto' });
+            }
+          }}
           currentRole={currentRole}
           dosenCount={dosenList.length}
           pendingLogbooksCount={pendingLogbooksCount}
           adminCount={adminList.length}
           plpCount={plpList.length}
+          pembimbingLapanganCount={Array.isArray(pembimbingLapanganList) ? pembimbingLapanganList.length : 0}
           mahasiswaCount={mahasiswaList.length}
         />
 
@@ -626,33 +1073,48 @@ export default function App() {
                 onSwitchUser={(user) => {
                   handleLoginSuccess(user);
                 }}
+                userList={userList}
+                onUpdateUserList={(newList) => {
+                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, newList, pembimbingLapanganList);
+                }}
                 dosenList={dosenList}
                 mahasiswaList={mahasiswaList}
                 adminList={adminList}
                 plpList={plpList}
+                pembimbingLapanganList={pembimbingLapanganList}
+                klkList={klkList}
+                logbooks={logbooks}
+                seminarList={seminarList}
+                suratList={suratList}
+                onLogout={handleLogout}
+                onSyncAllModules={(d, m, a, p, k, u, pb, log, sem, sur) => {
+                  syncAllModules(
+                    d ?? dosenList,
+                    m ?? mahasiswaList,
+                    a ?? adminList,
+                    p ?? plpList,
+                    k ?? klkList,
+                    u ?? userList,
+                    pb ?? pembimbingLapanganList,
+                    log,
+                    sem,
+                    sur
+                  );
+                }}
                 onUpdateDosenList={(newList) => {
-                  setDosenList(newList);
-                  try {
-                    localStorage.setItem('sikma_dosen_data', JSON.stringify(newList));
-                  } catch {}
+                  syncAllModules(newList, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList);
                 }}
                 onUpdateMahasiswaList={(newList) => {
-                  setMahasiswaList(newList);
-                  try {
-                    localStorage.setItem('sikma_mahasiswa_list', JSON.stringify(newList));
-                  } catch {}
+                  syncAllModules(dosenList, newList, adminList, plpList, klkList, userList, pembimbingLapanganList);
                 }}
                 onUpdateAdminList={(newList) => {
-                  setAdminList(newList);
-                  try {
-                    localStorage.setItem('sikma_admin_data', JSON.stringify(newList));
-                  } catch {}
+                  syncAllModules(dosenList, mahasiswaList, newList, plpList, klkList, userList, pembimbingLapanganList);
                 }}
                 onUpdatePlpList={(newList) => {
-                  setPlpList(newList);
-                  try {
-                    localStorage.setItem('sikma_plp_data', JSON.stringify(newList));
-                  } catch {}
+                  syncAllModules(dosenList, mahasiswaList, adminList, newList, klkList, userList, pembimbingLapanganList);
+                }}
+                onUpdatePembimbingLapanganList={(newList) => {
+                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, userList, newList);
                 }}
               />
             )
@@ -711,6 +1173,62 @@ export default function App() {
               onAddDosen={handleAddDosen}
               onUpdateDosen={handleUpdateDosen}
               onDeleteDosen={handleDeleteDosen}
+              onBulkDeleteDosen={handleBulkDeleteDosen}
+              mahasiswaList={mahasiswaList}
+              klkList={klkList}
+              onAssignMahasiswa={(targetDosen, nim, nama) => {
+                const cleanNim = (nim || '').replace(/\D/g, '');
+                const cleanNama = (nama || '').trim().toLowerCase();
+                const fullDosenNama = `${targetDosen.nama}${targetDosen.gelar ? ', ' + targetDosen.gelar : ''}`;
+
+                let updatedMhs = mahasiswaList.map((m) => {
+                  if (
+                    (cleanNim && m.nim && m.nim.replace(/\D/g, '') === cleanNim) ||
+                    (cleanNama && m.nama && m.nama.trim().toLowerCase() === cleanNama)
+                  ) {
+                    return {
+                      ...m,
+                      dosenPAId: targetDosen.id,
+                      dosenPANama: fullDosenNama,
+                      dosenPANip: targetDosen.nip || targetDosen.nidn || m.dosenPANip
+                    };
+                  }
+                  return m;
+                });
+
+                const exists = updatedMhs.some(
+                  (m) =>
+                    (cleanNim && m.nim && m.nim.replace(/\D/g, '') === cleanNim) ||
+                    (cleanNama && m.nama && m.nama.trim().toLowerCase() === cleanNama)
+                );
+
+                if (!exists) {
+                  const newMhs: Mahasiswa = {
+                    id: `mhs-${Date.now()}`,
+                    nim,
+                    nama,
+                    angkatan: `20${nim.slice(0, 2) || '23'}`,
+                    programStudi: 'S1 Kimia - FMIPA Universitas Brawijaya',
+                    dosenPAId: targetDosen.id,
+                    dosenPANama: fullDosenNama,
+                    dosenPANip: targetDosen.nip || targetDosen.nidn || '',
+                    status: 'Aktif',
+                    semester: 7,
+                    ipk: 3.5,
+                    totalSks: 110,
+                    tahapSkripsi: 'Penelitian Laboratorium',
+                    labPenelitian: targetDosen.lab || 'Laboratorium Kimia Analitik & Instrumentasi'
+                  };
+                  updatedMhs = [newMhs, ...updatedMhs];
+                }
+
+                const updatedDosen = dosenList.map((d) =>
+                  d.id === targetDosen.id
+                    ? { ...d, jumlahBimbingan: (d.jumlahBimbingan || 0) + 1 }
+                    : d
+                );
+                syncAllModules(updatedDosen, updatedMhs, adminList, plpList, klkList, userList);
+              }}
             />
           )}
 
@@ -727,6 +1245,7 @@ export default function App() {
                 onAddMahasiswa={handleAddMahasiswa}
                 onUpdateMahasiswa={handleUpdateMahasiswa}
                 onDeleteMahasiswa={handleDeleteMahasiswa}
+                onBulkDeleteMahasiswa={handleBulkDeleteMahasiswa}
                 dosenList={dosenList}
                 klkList={klkList}
               />
@@ -740,6 +1259,7 @@ export default function App() {
               onAddAdmin={handleAddAdmin}
               onUpdateAdmin={handleUpdateAdmin}
               onDeleteAdmin={handleDeleteAdmin}
+              onBulkDeleteAdmin={handleBulkDeleteAdmin}
             />
           )}
 
@@ -750,6 +1270,18 @@ export default function App() {
               onAddPLP={handleAddPLP}
               onUpdatePLP={handleUpdatePLP}
               onDeletePLP={handleDeletePLP}
+              onBulkDeletePLP={handleBulkDeletePLP}
+            />
+          )}
+
+          {activeTab === 'pembimbing-lapangan-management' && (
+            <PembimbingLapanganManagement
+              currentRole={currentRole}
+              pembimbingLapanganList={Array.isArray(pembimbingLapanganList) ? pembimbingLapanganList : []}
+              klkList={Array.isArray(klkList) ? klkList : []}
+              onUpdatePembimbingLapangan={handleUpdatePembimbingLapangan}
+              onDeletePembimbingLapangan={handleDeletePembimbingLapangan}
+              onBulkDeletePembimbingLapangan={handleBulkDeletePembimbingLapangan}
             />
           )}
 
@@ -848,6 +1380,8 @@ export default function App() {
               onVerifyLogbook={handleVerifyKLKLogbook}
               onSimpanNilai={handleSimpanNilaiKLK}
               onUpdateKLK={handleUpdateKLK}
+              onResetAllKLK={handleResetAllKLK}
+              onDeleteKLK={handleDeleteKLK}
             />
           )}
 

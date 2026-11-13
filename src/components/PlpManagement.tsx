@@ -3,7 +3,6 @@ import { PLPStaff, UserRole, LabRiset } from '../types/sikma';
 import {
   FlaskConical,
   Search,
-  Plus,
   Edit2,
   Trash2,
   Eye,
@@ -31,6 +30,7 @@ interface PlpManagementProps {
   onAddPLP: (plp: PLPStaff) => void;
   onUpdatePLP: (plp: PLPStaff) => void;
   onDeletePLP: (id: string) => void;
+  onBulkDeletePLP?: (ids: string[]) => void;
 }
 
 export const PlpManagement: React.FC<PlpManagementProps> = ({
@@ -38,7 +38,8 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
   plpList,
   onAddPLP,
   onUpdatePLP,
-  onDeletePLP
+  onDeletePLP,
+  onBulkDeletePLP
 }) => {
   const [searchQuery, setSearchQuery] = useState('');
   const [filterLab, setFilterLab] = useState<string>('Semua');
@@ -58,6 +59,9 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingPLP, setEditingPLP] = useState<PLPStaff | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const canBulkDelete = currentRole === 'super_admin' || currentRole === 'admin';
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // Flash message
   const [flashMessage, setFlashMessage] = useState<{
@@ -91,16 +95,19 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
   // Filtered List
   const filteredList = useMemo(() => {
     return plpList.filter((item) => {
+      if (!item) return false;
+      const q = (searchQuery || '').trim().toLowerCase();
       const matchSearch =
-        item.nama.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.labUtama.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.spesialisasiInstrumen.some((s) => s.toLowerCase().includes(searchQuery.toLowerCase())) ||
-        item.email.toLowerCase().includes(searchQuery.toLowerCase());
+        !q ||
+        (item.nama && item.nama.toLowerCase().includes(q)) ||
+        (item.labUtama && item.labUtama.toLowerCase().includes(q)) ||
+        (Array.isArray(item.spesialisasiInstrumen) && item.spesialisasiInstrumen.some((s) => s && s.toLowerCase().includes(q))) ||
+        (item.email && item.email.toLowerCase().includes(q));
 
       const matchLab = filterLab === 'Semua' || item.labUtama === filterLab;
       const matchJenjang = filterJenjang === 'Semua' || item.jenjang === filterJenjang;
 
-      return matchSearch && matchLab && matchJenjang;
+      return Boolean(matchSearch && matchLab && matchJenjang);
     });
   }, [plpList, searchQuery, filterLab, filterJenjang]);
 
@@ -113,6 +120,38 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
   const paginatedList = useMemo(() => {
     return filteredList.slice(startIndex, endIndex);
   }, [filteredList, startIndex, endIndex]);
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => plpList.some((p) => p.id === id)));
+  }, [plpList]);
+
+  const filteredIds = useMemo(() => filteredList.map((p) => p.id).filter(Boolean), [filteredList]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (!canBulkDelete || selectedIds.length === 0) return;
+    const count = selectedIds.length;
+    if (onBulkDeletePLP) {
+      onBulkDeletePLP(selectedIds);
+    } else {
+      selectedIds.forEach((id) => onDeletePLP(id));
+    }
+    setSelectedIds([]);
+    setBulkDeleteConfirmOpen(false);
+    showFlash('success', `${count} data staf PLP terpilih berhasil dihapus.`);
+  };
 
   // Statistics
   const stats = useMemo(() => {
@@ -138,10 +177,11 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
     if (editingPLP) {
       const updated: PLPStaff = {
         ...editingPLP,
-        nip: '',
+        nip: formData.nip || editingPLP.nip || '',
         nama: formData.nama,
         gelar: formData.gelar,
         jenjang: formData.jenjang,
+        jabatan: editingPLP.jenjang !== formData.jenjang ? `Pranata Laboratorium Pendidikan (${formData.jenjang})` : editingPLP.jabatan,
         labUtama: formData.labUtama,
         spesialisasiInstrumen: instrumenArray.length > 0 ? instrumenArray : editingPLP.spesialisasiInstrumen,
         tupoksiUtama: formData.tupoksiUtama,
@@ -180,7 +220,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
   const handleOpenEdit = (plp: PLPStaff) => {
     setEditingPLP(plp);
     setFormData({
-      nip: '',
+      nip: plp.nip || '',
       nama: plp.nama,
       gelar: plp.gelar,
       jenjang: plp.jenjang,
@@ -260,16 +300,6 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
             <Printer className="w-4 h-4 text-[#D4AF37]" />
             <span>Cetak</span>
           </button>
-          {(currentRole === 'admin' || currentRole === 'super_admin') && (
-            <button
-              id="btn-tambah-plp"
-              onClick={handleOpenAdd}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#D4AF37] hover:bg-[#c49f2e] text-[#002B49] rounded-lg text-xs font-bold shadow-xs transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Tenaga PLP</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -385,6 +415,34 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
           </div>
         </div>
 
+        {canBulkDelete && selectedIds.length > 0 && (
+          <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-rose-900 font-semibold">
+              <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>
+                <strong>{selectedIds.length}</strong> data PLP terpilih untuk dihapus
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+              >
+                Batal Pilih
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Terpilih ({selectedIds.length})</span>
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Table */}
         <div className="w-full overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -396,7 +454,25 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                 <th className="p-3 min-w-[220px]">Spesialisasi Instrumen</th>
                 <th className="p-3 min-w-[180px]">Kontak & Ruang</th>
                 <th className="p-3 text-center w-[120px]">Verifikator Bebas Lab</th>
-                <th className="p-3 text-center w-[110px]">Aksi</th>
+                <th className="p-3 text-center w-[150px]">
+                  <div className="flex items-center justify-center gap-2">
+                    <span>Aksi</span>
+                    {canBulkDelete && filteredIds.length > 0 && (
+                      <label
+                        className="inline-flex items-center gap-1 cursor-pointer select-none"
+                        title="Pilih semua data untuk hapus massal"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={toggleSelectAllFiltered}
+                          className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-[#002B49]"
+                        />
+                        <span className="text-[10px] font-medium text-slate-600">Semua</span>
+                      </label>
+                    )}
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -490,7 +566,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                         >
                           <Eye className="w-3.5 h-3.5" />
                         </button>
-                        {(currentRole === 'admin' || currentRole === 'super_admin') && (
+                        {canBulkDelete && (
                           <>
                             <button
                               id={`btn-edit-plp-${plp.id}`}
@@ -508,6 +584,17 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
+                            <label
+                              className="inline-flex items-center justify-center p-1 cursor-pointer"
+                              title={`Pilih ${plp.nama} untuk hapus massal`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={selectedIds.includes(plp.id)}
+                                onChange={() => toggleSelectRow(plp.id)}
+                                className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-rose-600"
+                              />
+                            </label>
                           </>
                         )}
                       </div>
@@ -1001,6 +1088,37 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold"
               >
                 Hapus
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal Bulk Delete */}
+      {canBulkDelete && bulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fadeIn">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-sm border border-slate-200 p-5 text-center">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto mb-3">
+              <Trash2 className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-sm text-slate-900">Konfirmasi Hapus Massal Data PLP</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Apakah Anda yakin ingin menghapus <strong>{selectedIds.length}</strong> data tenaga PLP yang dipilih? Tindakan ini tidak dapat dibatalkan.
+            </p>
+            <div className="flex justify-center gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Hapus Semua Terpilih
               </button>
             </div>
           </div>

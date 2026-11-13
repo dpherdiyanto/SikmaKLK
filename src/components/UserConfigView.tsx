@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   Users,
   UserPlus,
@@ -35,7 +35,7 @@ import {
   ChevronsLeft,
   ChevronsRight
 } from 'lucide-react';
-import { UserRole, AuthUser, Dosen, Mahasiswa, AdminStaff, PLPStaff } from '../types/sikma';
+import { UserRole, AuthUser, Dosen, Mahasiswa, AdminStaff, PLPStaff, PembimbingLapanganStaff, PengajuanKLK, LogbookLabItem, JadwalSeminar, SuratPengajuan } from '../types/sikma';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS } from '../data/userList';
 import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import {
@@ -43,7 +43,15 @@ import {
   getPasswordValidationMessage,
   generateCompliantPassword
 } from '../utils/passwordPolicy';
-import { syncSdmToUserAccounts, syncUserAccountToSdm } from '../utils/syncUserAndSdm';
+import {
+  syncSdmToUserAccounts,
+  syncUserAccountToSdm,
+  syncBidirectionalUsersAndSdm,
+  syncUserDeleteToSdm,
+  syncUserStatusToSdm,
+  syncUserEditAcrossAllModules,
+  syncUserDeleteAcrossAllModules
+} from '../utils/syncUserAndSdm';
 
 interface PasswordRequirementsBoxProps {
   password: string;
@@ -157,131 +165,215 @@ interface UserConfigViewProps {
   currentRole: UserRole;
   currentUser: AuthUser;
   onSwitchUser?: (user: AuthUser) => void;
+  onLogout?: () => void;
+  userList?: UserAccountItem[];
+  onUpdateUserList?: (newUsers: UserAccountItem[]) => void;
   dosenList?: Dosen[];
   mahasiswaList?: Mahasiswa[];
   adminList?: AdminStaff[];
   plpList?: PLPStaff[];
+  pembimbingLapanganList?: PembimbingLapanganStaff[];
+  klkList?: PengajuanKLK[];
+  logbooks?: LogbookLabItem[];
+  seminarList?: JadwalSeminar[];
+  suratList?: SuratPengajuan[];
+  onSyncAllModules?: (
+    dList?: Dosen[],
+    mList?: Mahasiswa[],
+    aList?: AdminStaff[],
+    pList?: PLPStaff[],
+    kList?: PengajuanKLK[],
+    uList?: UserAccountItem[],
+    pbList?: PembimbingLapanganStaff[],
+    logList?: LogbookLabItem[],
+    semList?: JadwalSeminar[],
+    surList?: SuratPengajuan[]
+  ) => void;
   onUpdateDosenList?: (newDosen: Dosen[]) => void;
   onUpdateMahasiswaList?: (newMhs: Mahasiswa[]) => void;
   onUpdateAdminList?: (newAdmin: AdminStaff[]) => void;
   onUpdatePlpList?: (newPlp: PLPStaff[]) => void;
+  onUpdatePembimbingLapanganList?: (newPb: PembimbingLapanganStaff[]) => void;
 }
 
 export const UserConfigView: React.FC<UserConfigViewProps> = ({
   currentRole,
   currentUser,
   onSwitchUser,
+  onLogout,
+  userList: userListProp,
+  onUpdateUserList,
   dosenList = [],
   mahasiswaList = [],
   adminList = [],
   plpList = [],
+  pembimbingLapanganList = [],
+  klkList = [],
+  logbooks = [],
+  seminarList = [],
+  suratList = [],
+  onSyncAllModules,
   onUpdateDosenList,
   onUpdateMahasiswaList,
   onUpdateAdminList,
-  onUpdatePlpList
+  onUpdatePlpList,
+  onUpdatePembimbingLapanganList
 }) => {
   // State for user list with automatic migration for Prof. Hermin and Zuper Admin
   const [userList, setUserList] = useState<UserAccountItem[]>(() => {
-    const saved = localStorage.getItem('sikma_user_accounts');
-    let list: UserAccountItem[] = INITIAL_USER_ACCOUNTS;
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          list = parsed;
-        }
-      } catch {}
+    let source = (userListProp && userListProp.length > 0) ? userListProp : null;
+    if (!source) {
+      const saved = localStorage.getItem('sikma_user_accounts');
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          if (Array.isArray(parsed) && parsed.length > 0) {
+            source = parsed;
+          }
+        } catch {}
+      }
     }
+    let list: UserAccountItem[] = (source || INITIAL_USER_ACCOUNTS)
+      .filter((u): u is UserAccountItem => !!u && typeof u === 'object')
+      .map((u) => ({
+        ...u,
+        id: u.id || `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+        nama: typeof u.nama === 'string' ? u.nama : ((u as any)?.name || u.username || 'Pengguna'),
+        username: typeof u.username === 'string' ? u.username : `user.${u.role || 'sikma'}`,
+        identifier: typeof u.identifier === 'string' ? u.identifier : '',
+        email: typeof u.email === 'string' ? u.email : `${u.username || 'user'}@ub.ac.id`,
+        role: u.role || 'mahasiswa',
+        status: u.status || 'Aktif',
+        unit: typeof u.unit === 'string' ? u.unit : '',
+        jabatan: typeof u.jabatan === 'string' ? u.jabatan : '',
+        avatarText: typeof u.avatarText === 'string' ? u.avatarText : 'UB'
+      }));
 
     let modified = false;
 
-    // 1. Ubah peran Prof. Dr. Dra. Hermin Sulistyarti, M.Si menjadi dosen
-    list = list.map((u) => {
-      if (u.nama.toLowerCase().includes('hermin sulistyarti') && u.role === 'super_admin') {
+    if (!userListProp || userListProp.length === 0) {
+      // 1. Ubah peran Prof. Dr. Dra. Hermin Sulistyarti, M.Si menjadi dosen
+      list = list.map((u) => {
+        const uNama = (u.nama || '').toLowerCase();
+        if (uNama.includes('hermin sulistyarti') && u.role === 'super_admin') {
+          modified = true;
+          return {
+            ...u,
+            role: 'dosen' as UserRole,
+            username: u.username === 'superadmin' ? 'hermin.sulistyarti' : u.username,
+            jabatan: 'Dosen Departemen Kimia FSTeM UB'
+          };
+        }
+        return u;
+      });
+
+      // 2. Pastikan akun role super_admin adalah Zuper Admin
+      const superAdminAcc = list.find((u) => u.role === 'super_admin');
+      if (!superAdminAcc) {
+        list = [INITIAL_USER_ACCOUNTS[0], ...list];
         modified = true;
-        return {
-          ...u,
-          role: 'dosen' as UserRole,
-          username: u.username === 'superadmin' ? 'hermin.sulistyarti' : u.username,
-          jabatan: 'Dosen Departemen Kimia FSTeM UB'
-        };
+      } else if (superAdminAcc.nama !== 'Zuper Admin') {
+        list = list.map((u) =>
+          u.role === 'super_admin'
+            ? {
+                ...u,
+                nama: 'Zuper Admin',
+                avatarText: 'ZA',
+                email: 'zuperadmin@ub.ac.id',
+                jabatan: 'Zuper Administrator Sistem SIKMA'
+              }
+            : u
+        );
+        modified = true;
       }
-      return u;
-    });
 
-    // 2. Pastikan akun role super_admin adalah Zuper Admin
-    const superAdminAcc = list.find((u) => u.role === 'super_admin');
-    if (!superAdminAcc) {
-      list = [INITIAL_USER_ACCOUNTS[0], ...list];
-      modified = true;
-    } else if (superAdminAcc.nama !== 'Zuper Admin') {
-      list = list.map((u) =>
-        u.role === 'super_admin'
-          ? {
-              ...u,
-              nama: 'Zuper Admin',
-              avatarText: 'ZA',
-              email: 'zuperadmin@ub.ac.id',
-              jabatan: 'Zuper Administrator Sistem SIKMA'
-            }
-          : u
-      );
-      modified = true;
-    }
-
-    // 3. Pastikan Prof. Hermin tetap terdaftar sebagai dosen
-    const hasHermin = list.some((u) => u.nama.toLowerCase().includes('hermin sulistyarti'));
-    if (!hasHermin) {
-      list.splice(1, 0, INITIAL_USER_ACCOUNTS[1]);
-      modified = true;
-    }
-
-    if (modified) {
+      // 3. Migrasi satu kali agar Prof. Hermin terdaftar sebagai dosen tanpa mengembalikan data jika sudah dihapus manual
       try {
-        localStorage.setItem('sikma_user_accounts', JSON.stringify(list));
+        if (!localStorage.getItem('sikma_hermin_migrated_v1')) {
+          const hasHermin = list.some((u) => (u.nama || '').toLowerCase().includes('hermin sulistyarti'));
+          if (!hasHermin) {
+            list.splice(1, 0, INITIAL_USER_ACCOUNTS[1]);
+            modified = true;
+          }
+          localStorage.setItem('sikma_hermin_migrated_v1', 'true');
+        }
       } catch {}
+
+      if (modified) {
+        try {
+          localStorage.setItem('sikma_user_accounts', JSON.stringify(list));
+        } catch {}
+      }
     }
 
     return list;
   });
 
+  // Sinkronisasi state lokal saat prop userList dari App diperbarui
+  useEffect(() => {
+    if (userListProp && userListProp.length > 0) {
+      const sanitized = userListProp
+        .filter((u): u is UserAccountItem => !!u && typeof u === 'object')
+        .map((u) => ({
+          ...u,
+          id: u.id || `usr-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+          nama: typeof u.nama === 'string' ? u.nama : ((u as any)?.name || u.username || 'Pengguna'),
+          username: typeof u.username === 'string' ? u.username : `user.${u.role || 'sikma'}`,
+          identifier: typeof u.identifier === 'string' ? u.identifier : '',
+          email: typeof u.email === 'string' ? u.email : `${u.username || 'user'}@ub.ac.id`,
+          role: u.role || 'mahasiswa',
+          status: u.status || 'Aktif',
+          unit: typeof u.unit === 'string' ? u.unit : '',
+          jabatan: typeof u.jabatan === 'string' ? u.jabatan : '',
+          avatarText: typeof u.avatarText === 'string' ? u.avatarText : 'UB'
+        }));
+      setUserList(sanitized);
+    }
+  }, [userListProp]);
+
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
 
-  // Auto-sync SDM data into userList when SDM lists change or on mount
-  useEffect(() => {
-    if (
-      dosenList.length > 0 ||
-      mahasiswaList.length > 0 ||
-      adminList.length > 0 ||
-      plpList.length > 0
-    ) {
-      const res = syncSdmToUserAccounts(
-        userList,
-        dosenList,
-        mahasiswaList,
-        adminList,
-        plpList
-      );
-      if (res.addedCount > 0 || res.updatedCount > 0) {
-        setUserList(res.updatedUsers);
-        try {
-          localStorage.setItem('sikma_user_accounts', JSON.stringify(res.updatedUsers));
-        } catch {}
-      }
-    }
-  }, [dosenList, mahasiswaList, adminList, plpList]);
-
   const handleManualSyncSdm = () => {
-    const res = syncSdmToUserAccounts(
+    const bidir = syncBidirectionalUsersAndSdm(
       userList,
       dosenList,
       mahasiswaList,
       adminList,
-      plpList
+      plpList,
+      pembimbingLapanganList
     );
-    saveUsers(res.updatedUsers);
+    const diffSummary = syncSdmToUserAccounts(
+      userList,
+      bidir.syncedDosen,
+      bidir.syncedMahasiswa,
+      bidir.syncedAdmin,
+      bidir.syncedPlp,
+      bidir.syncedPembimbingLapangan
+    );
+
+    saveUsers(bidir.syncedUsers);
+    if (onSyncAllModules) {
+      onSyncAllModules(
+        bidir.syncedDosen,
+        bidir.syncedMahasiswa,
+        bidir.syncedAdmin,
+        bidir.syncedPlp,
+        klkList,
+        bidir.syncedUsers,
+        bidir.syncedPembimbingLapangan,
+        logbooks,
+        seminarList,
+        suratList
+      );
+    } else {
+      if (onUpdateDosenList) onUpdateDosenList(bidir.syncedDosen);
+      if (onUpdateMahasiswaList) onUpdateMahasiswaList(bidir.syncedMahasiswa);
+      if (onUpdateAdminList) onUpdateAdminList(bidir.syncedAdmin);
+      if (onUpdatePlpList) onUpdatePlpList(bidir.syncedPlp);
+      if (onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(bidir.syncedPembimbingLapangan);
+    }
     setSyncNotice(
-      `Sinkronisasi Selesai! Sebanyak ${res.totalSynced} akun pengguna telah sinkron dengan menu Sumber Daya Manusia (${res.addedCount} akun baru ditambahkan, ${res.updatedCount} akun diperbarui).`
+      `Sinkronisasi 2 Arah Selesai! Sebanyak ${bidir.syncedUsers.length} akun pengguna telah tersinkronisasi penuh dengan menu SDM & KLK (${diffSummary.addedCount} akun baru ditambahkan, ${diffSummary.updatedCount} akun diperbarui).`
     );
     setTimeout(() => setSyncNotice(null), 6000);
   };
@@ -311,6 +403,11 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   const [showModalPassword, setShowModalPassword] = useState(false);
   const [showResetModalPassword, setShowResetModalPassword] = useState(true);
   const [copiedToast, setCopiedToast] = useState<string | null>(null);
+  const [modalError, setModalError] = useState<string | null>(null);
+  const [resetPassError, setResetPassError] = useState<string | null>(null);
+  const canBulkDelete = currentRole === 'super_admin' || currentRole === 'admin';
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // Form State for Add/Edit
   const [formData, setFormData] = useState({
@@ -320,29 +417,46 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     role: 'mahasiswa' as UserRole,
     identifier: '',
     email: '',
-    unit: 'Program Studi S1 Kimia FSTeM UB',
+    unit: 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya',
     jabatan: 'Mahasiswa',
     semester: 'Ganjil 2026 / 2027',
     status: 'Aktif' as 'Aktif' | 'Nonaktif' | 'Ditangguhkan',
     noHp: ''
   });
 
-  // Persist helper
-  const saveUsers = (updated: UserAccountItem[]) => {
+  // Persist helper without firing conflicting multi-syncs
+  const persistUserList = (updated: UserAccountItem[]) => {
     setUserList(updated);
-    localStorage.setItem('sikma_user_accounts', JSON.stringify(updated));
+    try {
+      localStorage.setItem('sikma_user_accounts', JSON.stringify(updated));
+    } catch {}
+  };
+
+  const saveUsers = (updated: UserAccountItem[]) => {
+    persistUserList(updated);
+    if (onUpdateUserList) {
+      onUpdateUserList(updated);
+    }
   };
 
   // Filtered Users
   const filteredUsers = userList.filter((user) => {
+    if (!user) return false;
+    const sTerm = (searchTerm || '').trim().toLowerCase();
+    const userNama = (typeof user.nama === 'string' ? user.nama : ((user as any)?.name || user.username || '')).toLowerCase();
+    const userUsername = (typeof user.username === 'string' ? user.username : '').toLowerCase();
+    const userIdentifier = (typeof user.identifier === 'string' ? user.identifier : '').toLowerCase();
+    const userEmail = (typeof user.email === 'string' ? user.email : '').toLowerCase();
+
     const matchesSearch =
-      user.nama.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.identifier.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      user.email.toLowerCase().includes(searchTerm.toLowerCase());
+      !sTerm ||
+      userNama.includes(sTerm) ||
+      userUsername.includes(sTerm) ||
+      userIdentifier.includes(sTerm) ||
+      userEmail.includes(sTerm);
     const matchesRole = roleFilter === 'all' || user.role === roleFilter;
     const matchesStatus = statusFilter === 'all' || user.status === statusFilter;
-    return matchesSearch && matchesRole && matchesStatus;
+    return Boolean(matchesSearch && matchesRole && matchesStatus);
   });
 
   // Pagination calculations (Limit 10 baris per halaman)
@@ -353,12 +467,43 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   const endIndex = Math.min(startIndex + pageSize, totalFiltered);
   const paginatedUsers = filteredUsers.slice(startIndex, endIndex);
 
+  useEffect(() => {
+    setSelectedIds((prev) =>
+      prev.filter((id) => userList.some((u) => u.id === id && currentUser?.username !== u.username))
+    );
+  }, [userList, currentUser?.username]);
+
+  const selectableFilteredIds = useMemo(
+    () =>
+      filteredUsers
+        .filter((u) => currentUser?.username !== u.username)
+        .map((u) => u.id)
+        .filter(Boolean),
+    [filteredUsers, currentUser?.username]
+  );
+
+  const allFilteredSelected =
+    selectableFilteredIds.length > 0 && selectableFilteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !selectableFilteredIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...selectableFilteredIds])));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
   // Metrics
   const totalUsers = userList.length;
   const superAdminCount = userList.filter((u) => u.role === 'super_admin').length;
   const adminCount = userList.filter((u) => u.role === 'admin').length;
   const dosenCount = userList.filter((u) => u.role === 'dosen').length;
   const mhsCount = userList.filter((u) => u.role === 'mahasiswa').length;
+  const eksternalCount = userList.filter((u) => u.role === 'eksternal').length;
 
   if (currentRole === 'mahasiswa') {
     return (
@@ -375,16 +520,58 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   }
 
   // Handlers
+  const handleRoleChange = (newRole: UserRole | 'plp' | 'eksternal') => {
+    let finalRole: UserRole = 'admin';
+    let defaultJabatan = formData.jabatan;
+    let defaultUnit = formData.unit;
+
+    if (newRole === 'mahasiswa') {
+      finalRole = 'mahasiswa';
+      defaultJabatan = 'Mahasiswa';
+      defaultUnit = 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya';
+    } else if (newRole === 'dosen') {
+      finalRole = 'dosen';
+      defaultJabatan = 'Dosen';
+      defaultUnit = 'Laboratorium Kimia Analitik & Instrumentasi';
+    } else if (newRole === 'plp') {
+      finalRole = 'admin';
+      defaultJabatan = 'PLP';
+      defaultUnit = 'Laboratorium Kimia Analitik & Instrumentasi';
+    } else if (newRole === 'eksternal') {
+      finalRole = 'eksternal';
+      defaultJabatan = 'Pembimbing Lapangan';
+      defaultUnit = 'Instansi / Mitra Industri KLK';
+    } else if (newRole === 'admin') {
+      finalRole = 'admin';
+      defaultJabatan = 'Admin';
+      defaultUnit = 'Sub-Bagian Akademik & Administrasi Departemen Kimia';
+    } else if (newRole === 'super_admin') {
+      finalRole = 'super_admin';
+      defaultJabatan = 'Admin';
+      defaultUnit = 'Departemen Kimia FMIPA Universitas Brawijaya';
+    }
+
+    setFormData((prev) => ({
+      ...prev,
+      role: finalRole,
+      jabatan: defaultJabatan,
+      unit: defaultUnit
+    }));
+    setModalError(null);
+  };
+
   const handleOpenAddModal = () => {
     setShowModalPassword(false);
+    setModalError(null);
+    const initialPass = generateCompliantPassword();
     setFormData({
       username: '',
-      password: '',
+      password: initialPass,
       nama: '',
       role: 'mahasiswa',
       identifier: '',
       email: '',
-      unit: 'Program Studi S1 Kimia FSTeM UB',
+      unit: 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya',
       jabatan: 'Mahasiswa',
       semester: 'Ganjil 2026 / 2027',
       status: 'Aktif',
@@ -395,6 +582,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
   const handleOpenEditModal = (user: UserAccountItem) => {
     setShowModalPassword(false);
+    setModalError(null);
     setEditingUser(user);
     setFormData({
       username: user.username,
@@ -403,7 +591,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       role: user.role,
       identifier: user.identifier,
       email: user.email,
-      unit: user.unit || 'Program Studi S1 Kimia FSTeM UB',
+      unit: user.unit || 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya',
       jabatan: user.jabatan || 'Mahasiswa',
       semester: user.semester || 'Ganjil 2026 / 2027',
       status: user.status,
@@ -431,23 +619,65 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
   const handleSaveUser = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!formData.username || !formData.nama || !formData.email) {
-      alert('Mohon lengkapi username, nama lengkap, dan email.');
+    setModalError(null);
+
+    const trimmedUser = formData.username.trim();
+    const trimmedNama = formData.nama.trim();
+    const trimmedEmail = formData.email.trim();
+
+    if (!trimmedUser || !trimmedNama || !trimmedEmail) {
+      setModalError('Mohon lengkapi Username, Nama Lengkap, dan Email resmi.');
       return;
     }
 
+    let finalPassword = formData.password.trim();
+
     if (!editingUser) {
-      const pwdValError = getPasswordValidationMessage(formData.password.trim());
+      if (!finalPassword) {
+        finalPassword = generateCompliantPassword();
+      } else {
+        const pwdValError = getPasswordValidationMessage(finalPassword);
+        if (pwdValError) {
+          setModalError(`Kata sandi belum memenuhi standar: ${pwdValError}`);
+          return;
+        }
+      }
+    } else if (finalPassword) {
+      const pwdValError = getPasswordValidationMessage(finalPassword);
       if (pwdValError) {
-        alert(`Gagal membuat akun: ${pwdValError}`);
+        setModalError(`Gagal mengubah kata sandi: ${pwdValError}`);
         return;
       }
-    } else if (formData.password.trim()) {
-      const pwdValError = getPasswordValidationMessage(formData.password.trim());
-      if (pwdValError) {
-        alert(`Gagal mengubah kata sandi: ${pwdValError}`);
-        return;
-      }
+    }
+
+    // Format identifier (NIM / NIP / ID Mitra Pembimbing)
+    let formattedIdentifier = formData.identifier.trim();
+    const cleanNum = formattedIdentifier.replace(/\D/g, '');
+    const formJabatan = (formData.jabatan || '').toLowerCase();
+    const isEksternalCheck =
+      formData.role === 'eksternal' ||
+      formData.jabatan === 'Pembimbing Lapangan' ||
+      formJabatan.includes('pembimbing lapangan') ||
+      formJabatan.includes('pembimbing lapang') ||
+      formJabatan.includes('mentor');
+
+    if (formData.role === 'mahasiswa') {
+      const nimNum = cleanNum || `235090200${Math.floor(100000 + Math.random() * 900000)}`;
+      formattedIdentifier = formattedIdentifier.startsWith('NIM.') ? formattedIdentifier : `NIM. ${nimNum}`;
+    } else if (formData.role === 'dosen') {
+      const nipNum = cleanNum || `197${Math.floor(10000000000 + Math.random() * 90000000000)}`;
+      formattedIdentifier = formattedIdentifier.startsWith('NIP.') ? formattedIdentifier : `NIP. ${nipNum}`;
+    } else if (isEksternalCheck) {
+      const idpNum = cleanNum ? `IDP-${cleanNum.slice(-7)}` : `IDP-${Math.floor(1000000 + Math.random() * 9000000)}`;
+      formattedIdentifier =
+        formattedIdentifier.startsWith('IDP') ||
+        formattedIdentifier.startsWith('NIK') ||
+        formattedIdentifier.startsWith('NIP')
+          ? formattedIdentifier
+          : idpNum;
+    } else if (formData.role === 'admin' || formData.role === 'super_admin') {
+      const nipNum = cleanNum || `1990${Math.floor(10000000 + Math.random() * 90000000)}`;
+      formattedIdentifier = formattedIdentifier.startsWith('NIP.') ? formattedIdentifier : `NIP. ${nipNum}`;
     }
 
     const getInitials = (str: string) => {
@@ -465,62 +695,116 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
           ? {
               ...u,
               ...formData,
-              password: formData.password.trim() ? formData.password.trim() : u.password,
+              identifier: formattedIdentifier,
+              password: finalPassword ? finalPassword : u.password,
               avatarText: getInitials(formData.nama)
             }
           : u
       );
-      saveUsers(updated);
-      setEditingUser(null);
+      persistUserList(updated);
 
-      // Sinkronisasi pembaruan ke modul Sumber Daya Manusia
+      // Sinkronisasi pembaruan ke seluruh modul: SDM, KLK, Logbook Lab, Jadwal Seminar, & Permohonan Surat
       const savedUser = updated.find((u) => u.id === editingUser.id);
       if (savedUser) {
-        const sdmRes = syncUserAccountToSdm(savedUser, {
+        const fullRes = syncUserEditAcrossAllModules(editingUser, savedUser, {
           dosenList,
           mahasiswaList,
           adminList,
-          plpList
+          plpList,
+          pembimbingLapanganList,
+          klkList,
+          logbooks,
+          seminarList,
+          suratList
         });
-        if (sdmRes.newDosenList && onUpdateDosenList) onUpdateDosenList(sdmRes.newDosenList);
-        if (sdmRes.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(sdmRes.newMahasiswaList);
-        if (sdmRes.newAdminList && onUpdateAdminList) onUpdateAdminList(sdmRes.newAdminList);
-        if (sdmRes.newPlpList && onUpdatePlpList) onUpdatePlpList(sdmRes.newPlpList);
+
+        const nextPb = fullRes.newPembimbingLapanganList || pembimbingLapanganList;
+
+        if (onSyncAllModules) {
+          onSyncAllModules(
+            fullRes.newDosenList,
+            fullRes.newMahasiswaList,
+            fullRes.newAdminList,
+            fullRes.newPlpList,
+            fullRes.newKlkList,
+            updated,
+            nextPb,
+            fullRes.newLogbooks,
+            fullRes.newSeminarList,
+            fullRes.newSuratList
+          );
+        } else {
+          if (onUpdateDosenList) onUpdateDosenList(fullRes.newDosenList);
+          if (onUpdateMahasiswaList) onUpdateMahasiswaList(fullRes.newMahasiswaList);
+          if (onUpdateAdminList) onUpdateAdminList(fullRes.newAdminList);
+          if (onUpdatePlpList) onUpdatePlpList(fullRes.newPlpList);
+          if (fullRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(fullRes.newPembimbingLapanganList);
+          if (onUpdateUserList) onUpdateUserList(updated);
+        }
       }
-      setSyncNotice(`Data akun "${formData.nama}" berhasil disimpan & disinkronkan ke modul Sumber Daya Manusia.`);
+      setEditingUser(null);
+      setSyncNotice(`Data akun "${formData.nama}" berhasil disimpan & disinkronkan ke seluruh modul sistem.`);
       setTimeout(() => setSyncNotice(null), 5000);
     } else {
       const newUser: UserAccountItem = {
         id: `usr-${Date.now().toString().slice(-4)}`,
         ...formData,
-        password: formData.password.trim(),
+        identifier: formattedIdentifier,
+        password: finalPassword,
         avatarText: getInitials(formData.nama),
         tanggalDibuat: new Date().toISOString().split('T')[0],
         terakhirLogin: 'Belum pernah login'
       };
-      saveUsers([newUser, ...userList]);
+      const updated = [newUser, ...userList];
+      persistUserList(updated);
       setIsAddModalOpen(false);
 
-      // Sinkronisasi penambahan akun baru ke modul Sumber Daya Manusia
+      // Sinkronisasi penambahan akun baru ke modul Sumber Daya Manusia & seluruh modul
       const sdmRes = syncUserAccountToSdm(newUser, {
         dosenList,
         mahasiswaList,
         adminList,
-        plpList
+        plpList,
+        pembimbingLapanganList
       });
-      if (sdmRes.newDosenList && onUpdateDosenList) onUpdateDosenList(sdmRes.newDosenList);
-      if (sdmRes.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(sdmRes.newMahasiswaList);
-      if (sdmRes.newAdminList && onUpdateAdminList) onUpdateAdminList(sdmRes.newAdminList);
-      if (sdmRes.newPlpList && onUpdatePlpList) onUpdatePlpList(sdmRes.newPlpList);
 
-      setSyncNotice(`Akun baru "${newUser.nama}" (${newUser.role.toUpperCase()}) berhasil ditambahkan & otomatis terdaftar di menu Sumber Daya Manusia.`);
+      const nextDosen = sdmRes.newDosenList || dosenList;
+      const nextMahasiswa = sdmRes.newMahasiswaList || mahasiswaList;
+      const nextAdmin = sdmRes.newAdminList || adminList;
+      const nextPlp = sdmRes.newPlpList || plpList;
+      const nextPb = sdmRes.newPembimbingLapanganList || pembimbingLapanganList;
+
+      if (onSyncAllModules) {
+        onSyncAllModules(
+          nextDosen,
+          nextMahasiswa,
+          nextAdmin,
+          nextPlp,
+          klkList,
+          updated,
+          nextPb,
+          logbooks,
+          seminarList,
+          suratList
+        );
+      } else {
+        if (sdmRes.newDosenList && onUpdateDosenList) onUpdateDosenList(nextDosen);
+        if (sdmRes.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(nextMahasiswa);
+        if (sdmRes.newAdminList && onUpdateAdminList) onUpdateAdminList(nextAdmin);
+        if (sdmRes.newPlpList && onUpdatePlpList) onUpdatePlpList(nextPlp);
+        if (sdmRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(nextPb);
+        if (onUpdateUserList) onUpdateUserList(updated);
+      }
+
+      setSyncNotice(`Akun baru "${newUser.nama}" (${newUser.role.toUpperCase()}) berhasil ditambahkan & otomatis terdaftar di SDM.`);
       setTimeout(() => setSyncNotice(null), 5000);
     }
   };
 
   const handleRequestDeleteUser = (user: UserAccountItem) => {
     if (userList.length <= 1) {
-      alert('Tidak dapat menghapus satu-satunya user sistem.');
+      setSyncNotice('Peringatan: Tidak dapat menghapus satu-satunya user sistem.');
+      setTimeout(() => setSyncNotice(null), 4000);
       return;
     }
     setUserToDelete(user);
@@ -536,35 +820,202 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   const handleConfirmDeleteUser = () => {
     if (!userToDelete) return;
     const updated = userList.filter((u) => u.id !== userToDelete.id);
-    saveUsers(updated);
-    setSyncNotice(`Pengguna "${userToDelete.nama}" (@${userToDelete.username}) berhasil dihapus.`);
+    persistUserList(updated);
+
+    // Sinkronisasi penghapusan ke SDM, KLK, Logbook Lab, Jadwal Seminar, & Permohonan Surat
+    const fullDel = syncUserDeleteAcrossAllModules(userToDelete, {
+      dosenList,
+      mahasiswaList,
+      adminList,
+      plpList,
+      pembimbingLapanganList,
+      klkList,
+      logbooks,
+      seminarList,
+      suratList
+    });
+
+    const nextPb = fullDel.newPembimbingLapanganList || pembimbingLapanganList;
+
+    if (onSyncAllModules) {
+      onSyncAllModules(
+        fullDel.newDosenList,
+        fullDel.newMahasiswaList,
+        fullDel.newAdminList,
+        fullDel.newPlpList,
+        fullDel.newKlkList,
+        updated,
+        nextPb,
+        fullDel.newLogbooks,
+        fullDel.newSeminarList,
+        fullDel.newSuratList
+      );
+    } else {
+      if (onUpdateDosenList) onUpdateDosenList(fullDel.newDosenList);
+      if (onUpdateMahasiswaList) onUpdateMahasiswaList(fullDel.newMahasiswaList);
+      if (onUpdateAdminList) onUpdateAdminList(fullDel.newAdminList);
+      if (onUpdatePlpList) onUpdatePlpList(fullDel.newPlpList);
+      if (fullDel.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(fullDel.newPembimbingLapanganList);
+      if (onUpdateUserList) onUpdateUserList(updated);
+    }
+
+    // Jika user yang dihapus adalah user yang sedang aktif login, lakukan logout
+    if (
+      currentUser &&
+      (currentUser.id === userToDelete.id || currentUser.username === userToDelete.username)
+    ) {
+      if (onLogout) {
+        onLogout();
+      }
+    }
+
+    setSyncNotice(`Pengguna "${userToDelete.nama}" (@${userToDelete.username}) berhasil dihapus dan dibersihkan dari seluruh modul sistem.`);
     setTimeout(() => setSyncNotice(null), 4000);
     setUserToDelete(null);
   };
 
+  const handleConfirmBulkDeleteUsers = () => {
+    if (!canBulkDelete || selectedIds.length === 0) return;
+
+    const targetUsers = userList.filter(
+      (u) => selectedIds.includes(u.id) && currentUser?.username !== u.username
+    );
+    if (targetUsers.length === 0) {
+      setBulkDeleteConfirmOpen(false);
+      return;
+    }
+
+    const targetIdSet = new Set(targetUsers.map((u) => u.id));
+    const updatedUsers = userList.filter((u) => !targetIdSet.has(u.id));
+
+    if (updatedUsers.length < 1) {
+      setSyncNotice('Peringatan: Tidak dapat menghapus seluruh akun karena sistem harus menyisakan minimal 1 pengguna.');
+      setTimeout(() => setSyncNotice(null), 4000);
+      setBulkDeleteConfirmOpen(false);
+      return;
+    }
+
+    persistUserList(updatedUsers);
+
+    let moduleState = {
+      dosenList,
+      mahasiswaList,
+      adminList,
+      plpList,
+      pembimbingLapanganList,
+      klkList,
+      logbooks,
+      seminarList,
+      suratList
+    };
+
+    for (const delUser of targetUsers) {
+      const res = syncUserDeleteAcrossAllModules(delUser, moduleState);
+      moduleState = {
+        dosenList: res.newDosenList,
+        mahasiswaList: res.newMahasiswaList,
+        adminList: res.newAdminList,
+        plpList: res.newPlpList,
+        pembimbingLapanganList: res.newPembimbingLapanganList ?? moduleState.pembimbingLapanganList,
+        klkList: res.newKlkList,
+        logbooks: res.newLogbooks ?? moduleState.logbooks,
+        seminarList: res.newSeminarList ?? moduleState.seminarList,
+        suratList: res.newSuratList ?? moduleState.suratList
+      };
+    }
+
+    if (onSyncAllModules) {
+      onSyncAllModules(
+        moduleState.dosenList,
+        moduleState.mahasiswaList,
+        moduleState.adminList,
+        moduleState.plpList,
+        moduleState.klkList,
+        updatedUsers,
+        moduleState.pembimbingLapanganList,
+        moduleState.logbooks,
+        moduleState.seminarList,
+        moduleState.suratList
+      );
+    } else {
+      if (onUpdateDosenList) onUpdateDosenList(moduleState.dosenList);
+      if (onUpdateMahasiswaList) onUpdateMahasiswaList(moduleState.mahasiswaList);
+      if (onUpdateAdminList) onUpdateAdminList(moduleState.adminList);
+      if (onUpdatePlpList) onUpdatePlpList(moduleState.plpList);
+      if (onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(moduleState.pembimbingLapanganList);
+      if (onUpdateUserList) onUpdateUserList(updatedUsers);
+    }
+
+    setSelectedIds([]);
+    setBulkDeleteConfirmOpen(false);
+    setSyncNotice(`${targetUsers.length} akun pengguna terpilih berhasil dihapus dan dibersihkan dari seluruh modul sistem.`);
+    setTimeout(() => setSyncNotice(null), 5000);
+  };
+
   const handleToggleStatus = (id: string) => {
+    let targetUser: UserAccountItem | undefined;
     const updated = userList.map((u) => {
       if (u.id === id) {
         const nextStatus = u.status === 'Aktif' ? 'Nonaktif' : 'Aktif';
-        return { ...u, status: nextStatus as 'Aktif' | 'Nonaktif' };
+        targetUser = { ...u, status: nextStatus as 'Aktif' | 'Nonaktif' };
+        return targetUser;
       }
       return u;
     });
-    saveUsers(updated);
+    persistUserList(updated);
+
+    if (targetUser) {
+      const sdmStat = syncUserStatusToSdm(targetUser, {
+        dosenList,
+        mahasiswaList,
+        adminList,
+        plpList,
+        pembimbingLapanganList
+      });
+      const nextDosen = sdmStat.newDosenList || dosenList;
+      const nextMahasiswa = sdmStat.newMahasiswaList || mahasiswaList;
+      const nextAdmin = sdmStat.newAdminList || adminList;
+      const nextPlp = sdmStat.newPlpList || plpList;
+      const nextPb = sdmStat.newPembimbingLapanganList || pembimbingLapanganList;
+
+      if (onSyncAllModules) {
+        onSyncAllModules(
+          nextDosen,
+          nextMahasiswa,
+          nextAdmin,
+          nextPlp,
+          klkList,
+          updated,
+          nextPb,
+          logbooks,
+          seminarList,
+          suratList
+        );
+      } else {
+        if (sdmStat.newDosenList && onUpdateDosenList) onUpdateDosenList(nextDosen);
+        if (sdmStat.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(nextMahasiswa);
+        if (sdmStat.newAdminList && onUpdateAdminList) onUpdateAdminList(nextAdmin);
+        if (sdmStat.newPlpList && onUpdatePlpList) onUpdatePlpList(nextPlp);
+        if (sdmStat.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(nextPb);
+        if (onUpdateUserList) onUpdateUserList(updated);
+      }
+    }
   };
 
   const handleResetPasswordConfirm = (e: React.FormEvent) => {
     e.preventDefault();
+    setResetPassError(null);
     const pwdValError = getPasswordValidationMessage(newPassword.trim());
     if (pwdValError) {
-      alert(`Gagal mereset kata sandi: ${pwdValError}`);
+      setResetPassError(`Gagal mereset kata sandi: ${pwdValError}`);
       return;
     }
     if (resetPassUser) {
       const updated = userList.map((u) =>
         u.id === resetPassUser.id ? { ...u, password: newPassword.trim() } : u
       );
-      saveUsers(updated);
+      persistUserList(updated);
+      if (onUpdateUserList) onUpdateUserList(updated);
     }
     setShowPassAlert(`Kata sandi untuk akun "${resetPassUser?.username}" berhasil diatur ulang menjadi: "${newPassword.trim()}"`);
     setResetPassUser(null);
@@ -694,23 +1145,23 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
             <span className="font-semibold text-slate-900">Sinkronisasi SDM Aktif:</span>
             <span className="text-slate-600">
-              Terhubung dengan {dosenList.length} Dosen, {mahasiswaList.length} Mahasiswa, {adminList.length} Admin, dan {plpList.length} PLP.
+              Terhubung dengan {dosenList.length} Dosen, {mahasiswaList.length} Mahasiswa, {adminList.length} Admin, {plpList.length} PLP, dan {pembimbingLapanganList.length} Pembimbing Lapangan.
             </span>
           </div>
           <div className="flex items-center gap-2 self-start sm:self-auto text-[11px] font-bold text-[#002B49] bg-white px-2.5 py-1 rounded-lg border border-slate-200">
-            <span>Total SDM Terintegrasi: {dosenList.length + mahasiswaList.length + adminList.length + plpList.length} Personel</span>
+            <span>Total SDM Terintegrasi: {dosenList.length + mahasiswaList.length + adminList.length + plpList.length + pembimbingLapanganList.length} Personel</span>
           </div>
         </div>
 
         {/* Metrics Grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mt-6 pt-5 border-t border-slate-100">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-6 pt-5 border-t border-slate-100">
           <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
             <div className="text-[11px] font-semibold text-slate-500 uppercase">Total User</div>
             <div className="text-xl font-extrabold text-[#002B49] mt-0.5">{totalUsers}</div>
             <div className="text-[10px] text-slate-400 mt-0.5">Pengguna terdaftar</div>
           </div>
           <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
-            <div className="text-[11px] font-semibold text-purple-700 uppercase">Zuper Admin</div>
+            <div className="text-[11px] font-semibold text-purple-700 uppercase">Super Admin</div>
             <div className="text-xl font-extrabold text-purple-900 mt-0.5">{superAdminCount}</div>
             <div className="text-[10px] text-purple-600 mt-0.5">Pimpinan Dept</div>
           </div>
@@ -724,10 +1175,15 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
             <div className="text-xl font-extrabold text-blue-900 mt-0.5">{dosenCount}</div>
             <div className="text-[10px] text-blue-600 mt-0.5">Dosen PA / Riset</div>
           </div>
-          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 col-span-2 sm:col-span-1">
+          <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
             <div className="text-[11px] font-semibold text-emerald-700 uppercase">Mahasiswa</div>
             <div className="text-xl font-extrabold text-emerald-900 mt-0.5">{mhsCount}</div>
             <div className="text-[10px] text-emerald-600 mt-0.5">S1 Kimia Aktif</div>
+          </div>
+          <div className="bg-cyan-50 border border-cyan-200 rounded-lg p-3">
+            <div className="text-[11px] font-semibold text-cyan-700 uppercase">Pembimbing Lapangan</div>
+            <div className="text-xl font-extrabold text-cyan-900 mt-0.5">{eksternalCount}</div>
+            <div className="text-[10px] text-cyan-600 mt-0.5">Mentor Mitra KLK</div>
           </div>
         </div>
       </div>
@@ -796,10 +1252,11 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                 className="bg-white border border-slate-300 rounded-lg px-2.5 py-1.5 text-xs font-medium focus:ring-2 focus:ring-[#002B49] focus:outline-none"
               >
                 <option value="all">Semua Peran</option>
-                <option value="super_admin">Zuper Admin</option>
+                <option value="super_admin">Super Admin</option>
                 <option value="admin">Admin Jurusan</option>
                 <option value="dosen">Dosen</option>
                 <option value="mahasiswa">Mahasiswa</option>
+                <option value="eksternal">Pembimbing Lapangan (Eksternal)</option>
               </select>
 
               <select
@@ -815,19 +1272,65 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
           </div>
 
           {/* User Table */}
-          <div className="overflow-x-auto rounded-lg border border-slate-200">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-[#002B49] text-white uppercase text-[11px] font-semibold tracking-wider">
-                <tr>
-                  <th className="py-3 px-4">Pengguna</th>
-                  <th className="py-3 px-4">Username & ID</th>
-                  <th className="py-3 px-4">Peran (Role)</th>
-                  <th className="py-3 px-4">Unit / Departemen</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4">Terakhir Login</th>
-                  <th className="py-3 px-4 text-right">Aksi</th>
-                </tr>
-              </thead>
+          <div className="rounded-lg border border-slate-200 overflow-hidden">
+            {canBulkDelete && selectedIds.length > 0 && (
+              <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div className="flex items-center gap-2 text-rose-900 font-semibold">
+                  <Trash2 className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>
+                    <strong>{selectedIds.length}</strong> akun pengguna terpilih untuk dihapus
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedIds([])}
+                    className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+                  >
+                    Batal Pilih
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setBulkDeleteConfirmOpen(true)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Hapus Terpilih ({selectedIds.length})</span>
+                  </button>
+                </div>
+              </div>
+            )}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead className="bg-[#002B49] text-white uppercase text-[11px] font-semibold tracking-wider">
+                  <tr>
+                    <th className="py-3 px-4">Pengguna</th>
+                    <th className="py-3 px-4">Username & ID</th>
+                    <th className="py-3 px-4">Peran (Role)</th>
+                    <th className="py-3 px-4">Unit / Departemen</th>
+                    <th className="py-3 px-4">Status</th>
+                    <th className="py-3 px-4">Terakhir Login</th>
+                    <th className="py-3 px-4 text-right">
+                      <div className="flex items-center justify-end gap-2">
+                        <span>Aksi</span>
+                        {canBulkDelete && selectableFilteredIds.length > 0 && (
+                          <label
+                            className="inline-flex items-center gap-1 cursor-pointer select-none normal-case tracking-normal"
+                            title="Pilih semua akun (kecuali akun aktif Anda) untuk hapus massal"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={allFilteredSelected}
+                              onChange={toggleSelectAllFiltered}
+                              className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-[#D4AF37]"
+                            />
+                            <span className="text-[10px] font-normal text-slate-200">Semua</span>
+                          </label>
+                        )}
+                      </div>
+                    </th>
+                  </tr>
+                </thead>
               <tbody className="divide-y divide-slate-100 bg-white">
                 {filteredUsers.length === 0 ? (
                   <tr>
@@ -921,15 +1424,19 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                                 ? 'bg-amber-100 text-amber-800 border border-amber-300'
                                 : user.role === 'dosen'
                                 ? 'bg-blue-100 text-blue-800 border border-blue-300'
+                                : user.role === 'eksternal'
+                                ? 'bg-cyan-100 text-cyan-800 border border-cyan-300'
                                 : 'bg-emerald-100 text-emerald-800 border border-emerald-300'
                             }`}
                           >
                             {user.role === 'super_admin'
-                              ? 'Zuper Admin'
+                              ? 'Super Admin'
                               : user.role === 'admin'
                               ? 'Admin Jurusan'
                               : user.role === 'dosen'
                               ? 'Dosen'
+                              : user.role === 'eksternal'
+                              ? 'Pembimbing Lapangan'
                               : 'Mahasiswa'}
                           </span>
                         </td>
@@ -1001,6 +1508,27 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                             >
                               <Trash2 className="w-3.5 h-3.5" />
                             </button>
+
+                            {canBulkDelete && (
+                              <label
+                                className={`inline-flex items-center justify-center p-1 ${
+                                  isSelf ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'
+                                }`}
+                                title={
+                                  isSelf
+                                    ? 'Akun aktif Anda tidak dapat dipilih untuk hapus massal'
+                                    : `Pilih ${user.nama} untuk hapus massal`
+                                }
+                              >
+                                <input
+                                  type="checkbox"
+                                  disabled={isSelf}
+                                  checked={!isSelf && selectedIds.includes(user.id)}
+                                  onChange={() => !isSelf && toggleSelectRow(user.id)}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-rose-600 disabled:cursor-not-allowed"
+                                />
+                              </label>
+                            )}
                           </div>
                         </td>
                       </tr>
@@ -1009,6 +1537,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                 )}
               </tbody>
             </table>
+            </div>
           </div>
 
           {/* Pagination Controls (Limit 10 baris per halaman) */}
@@ -1314,207 +1843,438 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
             </div>
 
             <form onSubmit={handleSaveUser} className="space-y-3.5 mt-4">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Username *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.username}
-                    onChange={(e) => setFormData({ ...formData, username: e.target.value.toLowerCase().replace(/\s+/g, '') })}
-                    placeholder="misal: ahmad.rizky"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Peran (Role) *</label>
-                  <select
-                    value={formData.role}
-                    onChange={(e) => setFormData({ ...formData, role: e.target.value as UserRole })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  >
-                    <option value="mahasiswa">Mahasiswa</option>
-                    <option value="dosen">Dosen</option>
-                    <option value="admin">Admin Jurusan</option>
-                    <option value="super_admin">Zuper Admin</option>
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Nama Lengkap & Gelar *</label>
-                <input
-                  type="text"
-                  required
-                  value={formData.nama}
-                  onChange={(e) => setFormData({ ...formData, nama: e.target.value })}
-                  placeholder="misal: Dr. Sc. Akhmad Sabarudin / Ahmad Rizky Pratama"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                />
-              </div>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">NIM / NIP *</label>
-                  <input
-                    type="text"
-                    required
-                    value={formData.identifier}
-                    onChange={(e) => setFormData({ ...formData, identifier: e.target.value })}
-                    placeholder="NIM. 215090... / NIP. 1974..."
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Email Resmi UB *</label>
-                  <input
-                    type="email"
-                    required
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    placeholder="user@ub.ac.id"
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  />
-                </div>
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-1.5">
-                    <label className="block text-xs font-semibold text-slate-700">
-                      Kata Sandi (Password) {editingUser ? <span className="text-slate-400 font-normal">(Opsional)</span> : <span className="text-rose-500">*</span>}
-                    </label>
-                    <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-mono font-medium border border-slate-200">
-                      8+ Karakter (A-Z, a-z, 0-9, Simbol)
-                    </span>
+              {modalError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start justify-between gap-2 text-xs text-rose-800 animate-in fade-in">
+                  <div className="flex items-start gap-2">
+                    <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-semibold">{modalError}</p>
+                      {modalError.includes('Kata sandi') && (
+                        <button
+                          type="button"
+                          onClick={handleGenerateAddPassword}
+                          className="mt-1.5 px-2.5 py-1 bg-rose-600 text-white hover:bg-rose-700 rounded text-[11px] font-bold flex items-center gap-1 transition-colors shadow-2xs"
+                        >
+                          <Wand2 className="w-3 h-3" />
+                          <span>Buat Sandi Kuat Otomatis Sekarang</span>
+                        </button>
+                      )}
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleGenerateAddPassword}
-                      className="text-[11px] font-bold text-[#002B49] hover:text-[#004b80] flex items-center gap-1 bg-amber-100/80 hover:bg-amber-200/80 px-2 py-0.5 rounded transition-colors"
-                      title="Otomatis buat kata sandi acak yang memenuhi seluruh kriteria kebijakan"
-                    >
-                      <Wand2 className="w-3 h-3 text-amber-700" />
-                      <span>Buat Sandi Acak</span>
-                    </button>
-                    {editingUser && (
-                      <span className="text-[10px] text-slate-400">Kosongkan jika tidak diubah</span>
+                  <button
+                    type="button"
+                    onClick={() => setModalError(null)}
+                    className="text-rose-400 hover:text-rose-600 p-0.5"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+
+              {(() => {
+                const modalJabatan = (formData.jabatan || '').toLowerCase();
+                const isEksternalUser =
+                  formData.role === 'eksternal' ||
+                  formData.jabatan === 'Pembimbing Lapangan' ||
+                  modalJabatan.includes('pembimbing lapangan') ||
+                  modalJabatan.includes('pembimbing lapang') ||
+                  modalJabatan.includes('mentor');
+
+                return (
+                  <>
+                    {isEksternalUser && (
+                      <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex items-start gap-2.5 text-xs text-amber-900 shadow-2xs">
+                        <Building className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                        <div>
+                          <span className="font-bold flex items-center gap-1.5 text-amber-950">
+                            Mode Pengisian User Eksternal (Pembimbing Lapangan)
+                            <span className="px-1.5 py-0.2 bg-amber-200 text-amber-900 rounded text-[10px]">SDM Mitra</span>
+                          </span>
+                          <p className="text-[11px] text-amber-800 mt-0.5 leading-relaxed">
+                            Formulir dan pilihan telah disesuaikan dengan kebutuhan <strong>Pembimbing Lapangan / Mentor Industri KLK</strong>. Akun ini otomatis terhubung dengan menu <strong>Data Pembimbing Lapangan</strong>.
+                          </p>
+                        </div>
+                      </div>
                     )}
-                  </div>
-                </div>
 
-                <div className="relative">
-                  <input
-                    type={showModalPassword ? 'text' : 'password'}
-                    required={!editingUser}
-                    value={formData.password}
-                    onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-                    placeholder={
-                      editingUser
-                        ? 'Ketik sandi baru (min. 8 karakter kombinasi huruf besar, kecil, angka, simbol)...'
-                        : 'Masukkan kata sandi (min. 8 karakter kombinasi huruf besar, kecil, angka, simbol)'
-                    }
-                    className="w-full pl-3 pr-20 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  />
-                  <div className="absolute inset-y-0 right-0 pr-2 flex items-center gap-1">
-                    {formData.password && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          navigator.clipboard?.writeText(formData.password);
-                          setCopiedToast(`Kata sandi "${formData.password}" disalin!`);
-                          setTimeout(() => setCopiedToast(null), 3000);
-                        }}
-                        className="p-1 text-slate-400 hover:text-slate-600 rounded"
-                        title="Salin Kata Sandi"
-                      >
-                        <Copy className="w-3.5 h-3.5" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setShowModalPassword(!showModalPassword)}
-                      className="p-1 text-slate-400 hover:text-slate-600 rounded"
-                      title={showModalPassword ? 'Sembunyikan Kata Sandi' : 'Lihat Kata Sandi'}
-                    >
-                      {showModalPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                    </button>
-                  </div>
-                </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Username *</label>
+                        <input
+                          type="text"
+                          required
+                          value={formData.username}
+                          onChange={(e) => {
+                            setFormData({ ...formData, username: (e.target.value || '').toLowerCase().replace(/\s+/g, '') });
+                            if (modalError) setModalError(null);
+                          }}
+                          placeholder={isEksternalUser ? "misal: tri.astuti" : "misal: ahmad.rizky"}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Peran & Kategori SDM *</label>
+                        <select
+                          value={
+                            isEksternalUser
+                              ? 'eksternal'
+                              : formData.role === 'admin' &&
+                                (modalJabatan.includes('plp') || modalJabatan.includes('laboran'))
+                              ? 'plp'
+                              : formData.role
+                          }
+                          onChange={(e) => handleRoleChange(e.target.value as UserRole | 'plp' | 'eksternal')}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        >
+                          <option value="mahasiswa">Mahasiswa (Data Mahasiswa)</option>
+                          <option value="dosen">Dosen (Manajemen Data Dosen)</option>
+                          <option value="admin">Admin Jurusan (Manajemen Data Admin)</option>
+                          <option value="plp">PLP (Data Manajemen PLP)</option>
+                          <option value="eksternal">User Eksternal (Pembimbing Lapangan)</option>
+                          <option value="super_admin">Super Admin</option>
+                        </select>
+                      </div>
+                    </div>
 
-                {/* Live Requirements checklist */}
-                {(!editingUser || formData.password.length > 0) && (
-                  <PasswordRequirementsBox
-                    password={formData.password}
-                    onGenerate={handleGenerateAddPassword}
-                    showGenerateButton={false}
-                  />
-                )}
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        {isEksternalUser ? "Nama Lengkap & Gelar Pembimbing Lapangan *" : "Nama Lengkap & Gelar *"}
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={formData.nama}
+                        onChange={(e) => setFormData({ ...formData, nama: e.target.value })}
+                        placeholder={
+                          isEksternalUser
+                            ? "misal: Dra. Tri Astuti, M.Si / Ir. Bambang Wijaya, M.T."
+                            : "misal: Dr. Sc. Akhmad Sabarudin / Ahmad Rizky Pratama"
+                        }
+                        className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                      />
+                    </div>
 
-                <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
-                  {editingUser
-                    ? 'Kata sandi ini digunakan untuk masuk dari halaman awal website portal SIKMA.'
-                    : 'Kata sandi ini digunakan untuk login dari halaman awal website bersama Username, NIM, atau NIP.'}
-                </p>
-              </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "ID / NIK Pembimbing Lapangan *" : "NIM / NIP *"}
+                        </label>
+                        <input
+                          type="text"
+                          required
+                          value={formData.identifier}
+                          onChange={(e) => setFormData({ ...formData, identifier: e.target.value })}
+                          placeholder={isEksternalUser ? "misal: IDP-8829101 / NIK. 35730..." : "NIM. 215090... / NIP. 1974..."}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "Email Resmi Instansi / Perusahaan *" : "Email Resmi UB *"}
+                        </label>
+                        <input
+                          type="email"
+                          required
+                          value={formData.email}
+                          onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                          placeholder={isEksternalUser ? "tri.astuti@petrokimia-gresik.com" : "user@ub.ac.id"}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "No. WhatsApp / HP Pembimbing" : "No. WhatsApp / HP"}
+                        </label>
+                        <input
+                          type="text"
+                          value={formData.noHp}
+                          onChange={(e) => setFormData({ ...formData, noHp: e.target.value })}
+                          placeholder="081234567890"
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        />
+                      </div>
+                    </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Jabatan / Status *</label>
-                  <select
-                    value={formData.jabatan}
-                    onChange={(e) => setFormData({ ...formData, jabatan: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  >
-                    <option value="Mahasiswa">Mahasiswa</option>
-                    <option value="Admin">Admin</option>
-                    <option value="Dosen">Dosen</option>
-                    <option value="PLP">PLP</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Semester *</label>
-                  <select
-                    value={formData.semester}
-                    onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  >
-                    {INITIAL_SEMESTER_LIST.map((sem) => (
-                      <option key={sem.id} value={sem.namaSemester}>
-                        {sem.namaSemester} {sem.status === 'Aktif' ? '(Aktif)' : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <div className="flex items-center gap-1.5">
+                          <label className="block text-xs font-semibold text-slate-700">
+                            Kata Sandi (Password) {editingUser ? <span className="text-slate-400 font-normal">(Opsional)</span> : <span className="text-rose-500">*</span>}
+                          </label>
+                          <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded font-mono font-medium border border-slate-200">
+                            8+ Karakter (A-Z, a-z, 0-9, Simbol)
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={handleGenerateAddPassword}
+                            className="text-[11px] font-bold text-[#002B49] hover:text-[#004b80] flex items-center gap-1 bg-amber-100/80 hover:bg-amber-200/80 px-2 py-0.5 rounded transition-colors"
+                            title="Otomatis buat kata sandi acak yang memenuhi seluruh kriteria kebijakan"
+                          >
+                            <Wand2 className="w-3 h-3 text-amber-700" />
+                            <span>Buat Sandi Acak</span>
+                          </button>
+                          {editingUser && (
+                            <span className="text-[10px] text-slate-400">Kosongkan jika tidak diubah</span>
+                          )}
+                        </div>
+                      </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Program Studi *</label>
-                  <select
-                    value={formData.unit}
-                    onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  >
-                    <option value="Program Studi S1 Kimia FSTeM UB">Program Studi S1 Kimia FSTeM UB</option>
-                    <option value="Program Studi S2 Kimia FSTeM UB">Program Studi S2 Kimia FSTeM UB</option>
-                    <option value="Program Studi S3 Kimia FSTeM UB">Program Studi S3 Kimia FSTeM UB</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Status Akun *</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as 'Aktif' | 'Nonaktif' })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
-                  >
-                    <option value="Aktif">Aktif</option>
-                    <option value="Nonaktif">Nonaktif</option>
-                  </select>
-                </div>
-              </div>
+                      <div className="relative">
+                        <input
+                          type={showModalPassword ? 'text' : 'password'}
+                          required={!editingUser}
+                          value={formData.password}
+                          onChange={(e) => setFormData({ ...formData, password: e.target.value })}
+                          placeholder={
+                            editingUser
+                              ? 'Ketik sandi baru (min. 8 karakter kombinasi huruf besar, kecil, angka, simbol)...'
+                              : 'Masukkan kata sandi (min. 8 karakter kombinasi huruf besar, kecil, angka, simbol)'
+                          }
+                          className="w-full pl-3 pr-20 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        />
+                        <div className="absolute inset-y-0 right-0 pr-2 flex items-center gap-1">
+                          {formData.password && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                navigator.clipboard?.writeText(formData.password);
+                                setCopiedToast(`Kata sandi "${formData.password}" disalin!`);
+                                setTimeout(() => setCopiedToast(null), 3000);
+                              }}
+                              className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                              title="Salin Kata Sandi"
+                            >
+                              <Copy className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => setShowModalPassword(!showModalPassword)}
+                            className="p-1 text-slate-400 hover:text-slate-600 rounded"
+                            title={showModalPassword ? 'Sembunyikan Kata Sandi' : 'Lihat Kata Sandi'}
+                          >
+                            {showModalPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Live Requirements checklist */}
+                      {(!editingUser || formData.password.length > 0) && (
+                        <PasswordRequirementsBox
+                          password={formData.password}
+                          onGenerate={handleGenerateAddPassword}
+                          showGenerateButton={false}
+                        />
+                      )}
+
+                      <p className="text-[11px] text-slate-500 mt-1 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0"></span>
+                        {editingUser
+                          ? 'Kata sandi ini digunakan untuk masuk dari halaman awal website portal SIKMA.'
+                          : 'Kata sandi ini digunakan untuk login dari halaman awal website bersama Username, NIM, atau NIP.'}
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "Jabatan / Peran di Instansi Mitra *" : "Jabatan / Status *"}
+                        </label>
+                        {isEksternalUser ? (
+                          <select
+                            value={formData.jabatan}
+                            onChange={(e) => setFormData({ ...formData, jabatan: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-amber-50/30"
+                          >
+                            {![
+                              'Pembimbing Lapangan',
+                              'Senior Process Engineer & Mentor KLK',
+                              'Head of Quality Assurance & Mentor KLK',
+                              'Kepala Laboratorium Pengujian & Mentor',
+                              'Peneliti Utama & Mentor KLK',
+                              'Supervisor Produksi & Mentor'
+                            ].includes(formData.jabatan) && formData.jabatan && (
+                              <option value={formData.jabatan}>{formData.jabatan}</option>
+                            )}
+                            <option value="Pembimbing Lapangan">Pembimbing Lapangan</option>
+                            <option value="Senior Process Engineer & Mentor KLK">Senior Process Engineer & Mentor KLK</option>
+                            <option value="Head of Quality Assurance & Mentor KLK">Head of Quality Assurance & Mentor KLK</option>
+                            <option value="Kepala Laboratorium Pengujian & Mentor">Kepala Laboratorium Pengujian & Mentor</option>
+                            <option value="Peneliti Utama & Mentor KLK">Peneliti Utama & Mentor KLK</option>
+                            <option value="Supervisor Produksi & Mentor">Supervisor Produksi & Mentor</option>
+                          </select>
+                        ) : (
+                          <select
+                            value={formData.jabatan}
+                            onChange={(e) => {
+                              const newJab = e.target.value;
+                              let newUnit = formData.unit;
+                              let newRole = formData.role;
+                              if (newJab === 'PLP') {
+                                newRole = 'admin';
+                                if (newUnit.startsWith('Program Studi')) newUnit = 'Laboratorium Kimia Analitik & Instrumentasi';
+                              } else if (newJab === 'Dosen') {
+                                newRole = 'dosen';
+                                if (newUnit.startsWith('Program Studi')) newUnit = 'Laboratorium Kimia Analitik & Instrumentasi';
+                              } else if (newJab === 'Admin') {
+                                if (newRole !== 'super_admin') newRole = 'admin';
+                                if (newUnit.startsWith('Program Studi')) newUnit = 'Sub-Bagian Akademik & Administrasi Departemen Kimia';
+                              } else if (newJab === 'Mahasiswa') {
+                                newRole = 'mahasiswa';
+                                if (!newUnit.startsWith('Program Studi')) newUnit = 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya';
+                              } else if (newJab === 'Pembimbing Lapangan') {
+                                newRole = 'eksternal';
+                                if (newUnit.startsWith('Program Studi') || newUnit.startsWith('Sub-Bagian')) newUnit = 'PT Petrokimia Gresik';
+                              }
+                              setFormData({ ...formData, role: newRole, jabatan: newJab, unit: newUnit });
+                            }}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                          >
+                            {!['Mahasiswa', 'Admin', 'Dosen', 'PLP', 'Pembimbing Lapangan'].includes(formData.jabatan) && formData.jabatan && (
+                              <option value={formData.jabatan}>{formData.jabatan}</option>
+                            )}
+                            <option value="Mahasiswa">Mahasiswa</option>
+                            <option value="Admin">Admin</option>
+                            <option value="Dosen">Dosen</option>
+                            <option value="PLP">PLP</option>
+                            <option value="Pembimbing Lapangan">Pembimbing Lapangan</option>
+                          </select>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "Periode Pembimbingan KLK *" : "Semester *"}
+                        </label>
+                        <select
+                          value={formData.semester}
+                          onChange={(e) => setFormData({ ...formData, semester: e.target.value })}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        >
+                          {INITIAL_SEMESTER_LIST.map((sem) => (
+                            <option key={sem.id} value={sem.namaSemester}>
+                              {sem.namaSemester} {sem.status === 'Aktif' ? '(Aktif)' : ''}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {isEksternalUser ? "Instansi / Perusahaan Mitra Industri KLK *" : "Program Studi / Unit Kerja *"}
+                        </label>
+                        {isEksternalUser ? (
+                          <div className="space-y-1.5">
+                            <select
+                              value={
+                                [
+                                  'PT Petrokimia Gresik',
+                                  'Pusat Riset Kimia - BRIN',
+                                  'PT Kalbe Farma Tbk',
+                                  'PT Pertamina (Persero) RU V Balikpapan',
+                                  'Balai Besar Laboratorium Kesehatan (BBLK) Surabaya',
+                                  'PT Badak NGL',
+                                  'PT Unilever Indonesia Tbk',
+                                  'PT Paragon Technology and Innovation',
+                                  'Instansi / Mitra Industri KLK'
+                                ].includes(formData.unit)
+                                  ? formData.unit
+                                  : 'lainnya'
+                              }
+                              onChange={(e) => {
+                                if (e.target.value !== 'lainnya') {
+                                  setFormData({ ...formData, unit: e.target.value });
+                                } else {
+                                  setFormData({ ...formData, unit: 'PT Bio Farma (Persero)' });
+                                }
+                              }}
+                              className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-amber-50/30"
+                            >
+                              <option value="PT Petrokimia Gresik">PT Petrokimia Gresik</option>
+                              <option value="Pusat Riset Kimia - BRIN">Pusat Riset Kimia - BRIN</option>
+                              <option value="PT Kalbe Farma Tbk">PT Kalbe Farma Tbk</option>
+                              <option value="PT Pertamina (Persero) RU V Balikpapan">PT Pertamina (Persero) RU V Balikpapan</option>
+                              <option value="Balai Besar Laboratorium Kesehatan (BBLK) Surabaya">Balai Besar Laboratorium Kesehatan (BBLK) Surabaya</option>
+                              <option value="PT Badak NGL">PT Badak NGL</option>
+                              <option value="PT Unilever Indonesia Tbk">PT Unilever Indonesia Tbk</option>
+                              <option value="PT Paragon Technology and Innovation">PT Paragon Technology and Innovation</option>
+                              <option value="Instansi / Mitra Industri KLK">Instansi / Mitra Industri KLK (Umum)</option>
+                              <option value="lainnya">Tulis Manual Nama Instansi Mitra...</option>
+                            </select>
+                            {(![
+                              'PT Petrokimia Gresik',
+                              'Pusat Riset Kimia - BRIN',
+                              'PT Kalbe Farma Tbk',
+                              'PT Pertamina (Persero) RU V Balikpapan',
+                              'Balai Besar Laboratorium Kesehatan (BBLK) Surabaya',
+                              'PT Badak NGL',
+                              'PT Unilever Indonesia Tbk',
+                              'PT Paragon Technology and Innovation',
+                              'Instansi / Mitra Industri KLK'
+                            ].includes(formData.unit) || formData.unit === 'lainnya') && (
+                              <input
+                                type="text"
+                                required
+                                value={formData.unit === 'lainnya' ? '' : formData.unit}
+                                onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                                placeholder="Ketik nama instansi/perusahaan mitra..."
+                                className="w-full px-3 py-1.5 border border-amber-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-amber-50/50 font-semibold"
+                              />
+                            )}
+                          </div>
+                        ) : (
+                          <select
+                            value={formData.unit}
+                            onChange={(e) => setFormData({ ...formData, unit: e.target.value })}
+                            className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                          >
+                            {![
+                              'Program Studi S1 Kimia - FMIPA Universitas Brawijaya',
+                              'Program Studi S2 Kimia - FMIPA Universitas Brawijaya',
+                              'Program Studi S3 Kimia - FMIPA Universitas Brawijaya',
+                              'Instansi / Mitra Industri KLK',
+                              'Laboratorium Kimia Analitik & Instrumentasi',
+                              'Laboratorium Kimia Organik & Bahan Alam',
+                              'Laboratorium Kimia Anorganik & Material',
+                              'Laboratorium Kimia Fisik & Elektrokimia',
+                              'Laboratorium Biokimia & Enzim',
+                              'Sub-Bagian Akademik & Administrasi Departemen Kimia',
+                              'Departemen Kimia FMIPA Universitas Brawijaya'
+                            ].includes(formData.unit) && formData.unit && (
+                              <option value={formData.unit}>{formData.unit}</option>
+                            )}
+                            <option value="Program Studi S1 Kimia - FMIPA Universitas Brawijaya">Program Studi S1 Kimia - FMIPA Universitas Brawijaya</option>
+                            <option value="Program Studi S2 Kimia - FMIPA Universitas Brawijaya">Program Studi S2 Kimia - FMIPA Universitas Brawijaya</option>
+                            <option value="Program Studi S3 Kimia - FMIPA Universitas Brawijaya">Program Studi S3 Kimia - FMIPA Universitas Brawijaya</option>
+                            <option value="Instansi / Mitra Industri KLK">Instansi / Mitra Industri KLK</option>
+                            <option value="Laboratorium Kimia Analitik & Instrumentasi">Laboratorium Kimia Analitik & Instrumentasi</option>
+                            <option value="Laboratorium Kimia Organik & Bahan Alam">Laboratorium Kimia Organik & Bahan Alam</option>
+                            <option value="Laboratorium Kimia Anorganik & Material">Laboratorium Kimia Anorganik & Material</option>
+                            <option value="Laboratorium Kimia Fisik & Elektrokimia">Laboratorium Kimia Fisik & Elektrokimia</option>
+                            <option value="Laboratorium Biokimia & Enzim">Laboratorium Biokimia & Enzim</option>
+                            <option value="Sub-Bagian Akademik & Administrasi Departemen Kimia">Sub-Bagian Akademik & Administrasi Departemen Kimia</option>
+                            <option value="Departemen Kimia FMIPA Universitas Brawijaya">Departemen Kimia FMIPA Universitas Brawijaya</option>
+                          </select>
+                        )}
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">Status Akun *</label>
+                        <select
+                          value={formData.status}
+                          onChange={(e) => setFormData({ ...formData, status: e.target.value as 'Aktif' | 'Nonaktif' })}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                        >
+                          <option value="Aktif">Aktif</option>
+                          <option value="Nonaktif">Nonaktif</option>
+                        </select>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
 
               <div className="flex items-center justify-end space-x-2 pt-4 border-t border-slate-100">
                 <button
@@ -1562,6 +2322,22 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
             <p className="text-xs text-slate-600 mb-4">
               Atur ulang kata sandi untuk akun <span className="font-bold font-mono text-[#002B49]">@{resetPassUser.username}</span> ({resetPassUser.nama}).
             </p>
+
+            {resetPassError && (
+              <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg flex items-start justify-between gap-2 text-xs text-rose-800 mb-3">
+                <div className="flex items-start gap-2">
+                  <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                  <p className="font-semibold">{resetPassError}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setResetPassError(null)}
+                  className="text-rose-400 hover:text-rose-600 p-0.5"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
 
             <form onSubmit={handleResetPasswordConfirm} className="space-y-4">
               <div>
@@ -1679,6 +2455,9 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                   </div>
                 )}
               </div>
+              <p className="text-[11px] text-rose-800 mt-2.5 font-medium leading-relaxed bg-rose-100/70 p-2 rounded border border-rose-200">
+                Pembersihan Otomatis: Data akun ini di modul Sumber Daya Manusia (SDM) dan seluruh rangkaian menu terkait (KLK, Logbook Lab, Jadwal Seminar, & Permohonan Surat) akan otomatis disinkronkan dan dibersihkan.
+              </p>
             </div>
 
             <div className="flex items-center justify-end space-x-3 pt-2">
@@ -1698,6 +2477,50 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
               >
                 <Trash2 className="w-3.5 h-3.5" />
                 <span>Ya</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Massal User */}
+      {canBulkDelete && bulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-md w-full p-6 border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center space-x-3 text-rose-600 mb-3">
+              <div className="w-10 h-10 rounded-full bg-rose-100 flex items-center justify-center shrink-0">
+                <Trash2 className="w-5 h-5 text-rose-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-slate-900">Konfirmasi Hapus Massal User</h3>
+                <p className="text-xs text-slate-500">Tindakan ini tidak dapat dibatalkan</p>
+              </div>
+            </div>
+
+            <div className="my-4 p-4 bg-rose-50/70 border border-rose-200 rounded-lg text-slate-700">
+              <p className="text-xs text-slate-700 leading-relaxed">
+                Apakah Anda yakin ingin menghapus <strong className="text-rose-900">{selectedIds.length}</strong> akun pengguna yang dipilih?
+              </p>
+              <p className="text-[11px] text-rose-800 mt-2.5 font-medium leading-relaxed bg-rose-100/70 p-2 rounded border border-rose-200">
+                Pembersihan Otomatis: Seluruh data akun yang dipilih pada modul Sumber Daya Manusia (SDM) dan rangkaian menu terkait (KLK, Logbook Lab, Jadwal Seminar, &amp; Permohonan Surat) akan otomatis dibersihkan.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end space-x-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 font-semibold transition-all cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDeleteUsers}
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Hapus Semua Terpilih</span>
               </button>
             </div>
           </div>

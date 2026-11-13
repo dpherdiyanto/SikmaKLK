@@ -4,7 +4,6 @@ import { Mahasiswa, Dosen, UserRole, LabRiset, PengajuanKLK } from '../types/sik
 import {
   GraduationCap,
   Search,
-  Plus,
   Edit2,
   Trash2,
   Eye,
@@ -37,6 +36,7 @@ interface MahasiswaManagementProps {
   onAddMahasiswa: (mhs: Mahasiswa) => void;
   onUpdateMahasiswa: (mhs: Mahasiswa) => void;
   onDeleteMahasiswa: (id: string) => void;
+  onBulkDeleteMahasiswa?: (ids: string[]) => void;
   dosenList?: Dosen[];
   klkList?: PengajuanKLK[];
 }
@@ -47,10 +47,13 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
   onAddMahasiswa,
   onUpdateMahasiswa,
   onDeleteMahasiswa,
+  onBulkDeleteMahasiswa,
   dosenList = [],
   klkList = []
 }) => {
   const canManage = currentRole === 'super_admin' || currentRole === 'admin';
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
   // Helper pencarian data KLK mahasiswa secara sinkron
   const getMahasiswaKlk = (m: Mahasiswa): PengajuanKLK | undefined => {
@@ -119,7 +122,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
     nama: '',
     angkatan: '2023',
     programStudi: 'S1 Kimia - FMIPA Universitas Brawijaya',
-    dosenPANama: dosenList[0]?.nama || 'Dr. Dra. Hermin Sulistyarti, M.Si',
+    dosenPANama: '',
     status: 'Aktif',
     semester: 3,
     ipk: 3.65,
@@ -147,7 +150,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
         m.nim.toLowerCase().includes(q) ||
         (m.judulSkripsi && m.judulSkripsi.toLowerCase().includes(q)) ||
         (m.labPenelitian && m.labPenelitian.toLowerCase().includes(q)) ||
-        m.dosenPANama.toLowerCase().includes(q);
+        Boolean(m.dosenPANama && m.dosenPANama.toLowerCase().includes(q));
 
       const matchAngkatan = filterAngkatan === 'Semua' || m.angkatan === filterAngkatan;
       const matchSemester =
@@ -220,7 +223,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
       nama: m.nama,
       angkatan: m.angkatan,
       programStudi: m.programStudi,
-      dosenPANama: m.dosenPANama,
+      dosenPANama: m.dosenPANama || '',
       status: m.status,
       semester: m.semester,
       ipk: m.ipk,
@@ -241,23 +244,36 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
     }
 
     if (editingMhs) {
+      const selectedDosen = dosenList.find(
+        (d) => `${d.nama}, ${d.gelar}` === formData.dosenPANama
+      );
       const updated: Mahasiswa = {
         ...editingMhs,
         ...formData,
         nim: formData.nim.trim(),
         nama: formData.nama.trim(),
+        unit: editingMhs.programStudi !== formData.programStudi.trim() ? formData.programStudi.trim() : editingMhs.unit,
+        dosenPAId: selectedDosen?.id || (formData.dosenPANama ? editingMhs.dosenPAId || 'dos-1' : ''),
+        dosenPANama: formData.dosenPANama ? formData.dosenPANama.trim() : '',
         judulSkripsi: formData.judulSkripsi.trim() || undefined
       };
       onUpdateMahasiswa(updated);
       showFlash('success', `Data mahasiswa ${updated.nama} berhasil diperbarui.`);
       setEditingMhs(null);
+      if (detailMhs && detailMhs.id === updated.id) {
+        setDetailMhs(updated);
+      }
     } else {
+      const selectedDosen = dosenList.find(
+        (d) => `${d.nama}, ${d.gelar}` === formData.dosenPANama
+      );
       const newMhs: Mahasiswa = {
         id: `mhs-${Date.now()}`,
         ...formData,
         nim: formData.nim.trim(),
         nama: formData.nama.trim(),
-        dosenPAId: 'dos-1',
+        dosenPAId: selectedDosen?.id || (formData.dosenPANama ? 'dos-1' : ''),
+        dosenPANama: formData.dosenPANama ? formData.dosenPANama.trim() : '',
         judulSkripsi: formData.judulSkripsi.trim() || undefined
       };
       onAddMahasiswa(newMhs);
@@ -273,6 +289,38 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
     onDeleteMahasiswa(deleteConfirmId);
     showFlash('success', `Data mahasiswa ${target ? target.nama : ''} berhasil dihapus dari sistem.`);
     setDeleteConfirmId(null);
+  };
+
+  useEffect(() => {
+    setSelectedIds((prev) => prev.filter((id) => mahasiswaList.some((m) => m.id === id)));
+  }, [mahasiswaList]);
+
+  const filteredIds = useMemo(() => filteredList.map((m) => m.id).filter(Boolean), [filteredList]);
+  const allFilteredSelected = filteredIds.length > 0 && filteredIds.every((id) => selectedIds.includes(id));
+
+  const toggleSelectAllFiltered = () => {
+    if (allFilteredSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      setSelectedIds((prev) => Array.from(new Set([...prev, ...filteredIds])));
+    }
+  };
+
+  const toggleSelectRow = (id: string) => {
+    setSelectedIds((prev) => (prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]));
+  };
+
+  const handleConfirmBulkDelete = () => {
+    if (!canManage || selectedIds.length === 0) return;
+    const count = selectedIds.length;
+    if (onBulkDeleteMahasiswa) {
+      onBulkDeleteMahasiswa(selectedIds);
+    } else {
+      selectedIds.forEach((id) => onDeleteMahasiswa(id));
+    }
+    setSelectedIds([]);
+    setBulkDeleteConfirmOpen(false);
+    showFlash('success', `${count} data mahasiswa berhasil dihapus dari sistem.`);
   };
 
   // Download Rekap Mahasiswa (Excel .xlsx)
@@ -322,7 +370,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
         m.status,
         m.ipk,
         m.totalSks,
-        m.dosenPANama,
+        m.dosenPANama || '-',
         m.tahapSkripsi,
         m.labPenelitian || '-',
         m.judulSkripsi || '-',
@@ -395,7 +443,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
           `"${m.status}"`,
           m.ipk,
           m.totalSks,
-          `"${m.dosenPANama}"`,
+          `"${m.dosenPANama || '-'}"`,
           `"${m.tahapSkripsi}"`,
           `"${m.labPenelitian || '-'}"`,
           `"${(m.judulSkripsi || '-').replace(/"/g, '""')}"`,
@@ -472,18 +520,6 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
             <Printer className="w-4 h-4 text-slate-300" />
             <span>Cetak</span>
           </button>
-
-          {canManage && (
-            <button
-              type="button"
-              id="btn-tambah-mahasiswa"
-              onClick={handleOpenAdd}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Mahasiswa</span>
-            </button>
-          )}
         </div>
       </div>
 
@@ -698,6 +734,32 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
 
       {/* Main Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+        {canManage && selectedIds.length > 0 && (
+          <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex flex-wrap items-center justify-between gap-2 text-xs">
+            <div className="flex items-center gap-2 text-rose-900 font-semibold">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+              <span>
+                <strong>{selectedIds.length}</strong> data mahasiswa terpilih untuk dihapus
+              </span>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setSelectedIds([])}
+                className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 font-semibold cursor-pointer"
+              >
+                Batal Pilih
+              </button>
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
+              >
+                <span>Hapus Terpilih ({selectedIds.length})</span>
+              </button>
+            </div>
+          </div>
+        )}
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
             <thead>
@@ -710,7 +772,25 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                 <th className="p-3 min-w-[220px]">Tahap Skripsi & Laboratorium</th>
                 <th className="p-3 text-center min-w-[130px]">Status KLK</th>
                 <th className="p-3 text-center min-w-[90px]">Status</th>
-                <th className="p-3 text-center min-w-[120px]">Aksi</th>
+                <th className="p-3 text-center min-w-[140px]">
+                  <div className="flex items-center justify-center gap-2">
+                    <span>Aksi</span>
+                    {canManage && filteredIds.length > 0 && (
+                      <label
+                        className="inline-flex items-center gap-1 cursor-pointer select-none"
+                        title="Pilih semua data untuk hapus massal"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={allFilteredSelected}
+                          onChange={toggleSelectAllFiltered}
+                          className="w-3.5 h-3.5 rounded border-slate-300 cursor-pointer accent-[#D4AF37]"
+                        />
+                        <span className="text-[10px] font-normal text-slate-200">Semua</span>
+                      </label>
+                    )}
+                  </div>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-200">
@@ -752,12 +832,20 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
 
                   {/* Dosen PA */}
                   <td className="p-3">
-                    <div className="font-semibold text-slate-800 text-xs line-clamp-1" title={m.dosenPANama}>
-                      {m.dosenPANama}
-                    </div>
-                    <div className="text-[10px] text-slate-500 mt-0.5">
-                      Dosen Pembimbing Akademik
-                    </div>
+                    {m.dosenPANama && m.dosenPANama.trim() !== '' ? (
+                      <>
+                        <div className="font-semibold text-slate-800 text-xs line-clamp-1" title={m.dosenPANama}>
+                          {m.dosenPANama}
+                        </div>
+                        <div className="text-[10px] text-slate-500 mt-0.5">
+                          Dosen Pembimbing Akademik
+                        </div>
+                      </>
+                    ) : (
+                      <span className="inline-block px-2 py-0.5 rounded text-[10px] font-medium bg-slate-100 text-slate-400 border border-slate-200 italic">
+                        -
+                      </span>
+                    )}
                   </td>
 
                   {/* IPK / SKS */}
@@ -884,6 +972,13 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                           >
                             <Trash2 className="w-3.5 h-3.5" />
                           </button>
+                          <input
+                            type="checkbox"
+                            checked={selectedIds.includes(m.id)}
+                            onChange={() => toggleSelectRow(m.id)}
+                            title="Pilih data untuk hapus massal"
+                            className="w-3.5 h-3.5 ml-1 rounded border-slate-300 cursor-pointer accent-rose-600"
+                          />
                         </>
                       )}
                     </div>
@@ -1098,10 +1193,12 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                     <span className="text-slate-500 block">Program Studi</span>
                     <strong className="text-slate-900 font-semibold">{detailMhs.programStudi}</strong>
                   </div>
-                  <div>
-                    <span className="text-slate-500 block">Dosen Pembimbing Akademik (PA)</span>
-                    <strong className="text-slate-900 font-semibold">{detailMhs.dosenPANama}</strong>
-                  </div>
+                  {detailMhs.dosenPANama && detailMhs.dosenPANama.trim() !== '' && (
+                    <div>
+                      <span className="text-slate-500 block">Dosen Pembimbing Akademik (PA)</span>
+                      <strong className="text-slate-900 font-semibold">{detailMhs.dosenPANama}</strong>
+                    </div>
+                  )}
                   <div>
                     <span className="text-slate-500 block">Indeks Prestasi Kumulatif (IPK)</span>
                     <strong className="text-slate-900 font-mono text-sm font-black text-[#002B49]">
@@ -1328,7 +1425,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                         <td className="p-2 text-center">{m.semester}</td>
                         <td className="p-2 text-center font-mono font-bold text-[#002B49]">{m.ipk.toFixed(2)}</td>
                         <td className="p-2 text-center">{m.totalSks}</td>
-                        <td className="p-2 text-slate-700">{m.dosenPANama}</td>
+                        <td className="p-2 text-slate-700">{m.dosenPANama || '-'}</td>
                         <td className="p-2 text-center font-bold text-[10px]">{m.status}</td>
                       </tr>
                     ))}
@@ -1479,6 +1576,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                     onChange={(e) => setFormData({ ...formData, dosenPANama: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
                   >
+                    <option value="">-- Pilih Dosen Pembimbing Akademik --</option>
                     {dosenList.map((d) => (
                       <option key={d.id} value={`${d.nama}, ${d.gelar}`}>
                         {d.nama}, {d.gelar} ({d.bidang})
@@ -1636,6 +1734,39 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
               >
                 Hapus Sekarang
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Konfirmasi Hapus Massal */}
+      {canManage && bulkDeleteConfirmOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
+          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full p-5 text-center space-y-4">
+            <div className="w-12 h-12 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-sm">Hapus Massal Data Mahasiswa?</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Apakah Anda yakin ingin menghapus <strong>{selectedIds.length}</strong> data mahasiswa yang dipilih? Tindakan ini tidak dapat dibatalkan.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setBulkDeleteConfirmOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmBulkDelete}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-xl text-xs shadow-xs cursor-pointer"
+              >
+                Hapus Semua Terpilih
               </button>
             </div>
           </div>

@@ -92,5 +92,26 @@ export const PREDEFINED_ACCOUNTS: Record<UserRole, PredefinedAccount> = {
       'Pengajuan Surat Izin Penelitian & Permohonan Bebas Lab',
       'Pemantauan Jadwal Seminar Proposal / Ujian Skripsi'
     ]
+  },
+  eksternal: {
+    id: 'user-pbl-1',
+    username: 'pembimbing.pbl',
+    nama: 'Dra. Tri Astuti, M.Si',
+    role: 'eksternal',
+    identifier: 'IDP-8829101',
+    email: 'tri.astuti@petrokimia-gresik.com',
+    avatarText: 'TA',
+    unit: 'PT Petrokimia Gresik (Persero)',
+    jabatan: 'Pembimbing Lapangan & Mentor KLK',
+    passwordHint: 'Pembimbing@123',
+    badgeLabel: 'User Eksternal',
+    badgeColor: 'bg-amber-600 text-white border-amber-500',
+    deskripsiPeran: 'Otorisasi Pembimbing Lapangan / Mentor Mitra Industri KLK: Verifikasi logbook mingguan mahasiswa magang di industri, evaluasi kinerja lapangan, dan penginputan nilai evaluasi industri.',
+    fiturUtama: [
+      'Akses Otorisasi Khusus Tab Aktivitas Pembimbing Lapangan',
+      'Verifikasi Logbook Mingguan Mahasiswa KLK di Industri',
+      'Pemberian Catatan & Feedback Kinerja Lapangan',
+      'Penginputan Nilai Evaluasi Lapangan (Nilai Industri)'
+    ]
   }
 };

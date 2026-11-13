@@ -21,7 +21,8 @@ import {
   RefreshCw,
   Sparkles,
   HelpCircle,
-  Info
+  Info,
+  Trash2
 } from 'lucide-react';
 import { INITIAL_MAHASISWA_LIST } from '../data/mahasiswaList.ts';
 import { Mahasiswa } from '../types/sikma';
@@ -159,7 +160,7 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
   const [actionNotice, setActionNotice] = useState<string | null>(null);
 
   // Load verified students
-  const [verifiedList] = useState<VerifiedStudentRecord[]>(() => {
+  const [verifiedList, setVerifiedList] = useState<VerifiedStudentRecord[]>(() => {
     try {
       const saved = localStorage.getItem('sikma_klk_verified_students');
       return saved ? JSON.parse(saved) : [];
@@ -167,6 +168,26 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
       return [];
     }
   });
+
+  // Delete student presensi & unblock record
+  const handleDeleteStudentRecord = (nim: string, nama: string) => {
+    const cleanNim = nim.replace(/\D/g, '');
+    if (confirm(`Apakah Anda yakin ingin menghapus data status presensi & buka blokir untuk mahasiswa ${nama} (${cleanNim})?`)) {
+      // 1. Remove from unblockedNims
+      const nextUnblocked = unblockedNims.filter((n) => n !== cleanNim);
+      onSaveUnblockedNims(nextUnblocked);
+
+      // 2. Remove from verifiedList
+      const nextVerified = verifiedList.filter((v) => v.nim.replace(/\D/g, '') !== cleanNim);
+      setVerifiedList(nextVerified);
+      try {
+        localStorage.setItem('sikma_klk_verified_students', JSON.stringify(nextVerified));
+      } catch {}
+
+      setActionNotice(`Data status presensi & buka blokir mahasiswa ${nama} (NIM: ${cleanNim}) telah berhasil dihapus.`);
+      setTimeout(() => setActionNotice(null), 4000);
+    }
+  };
 
   // Handle Generate QR Code
   const handleGenerateQr = async (e: React.FormEvent) => {
@@ -254,12 +275,12 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
 
   // Delete QR
   const handleDeleteQr = (id: string) => {
-    if (confirm('Yakin ingin menghapus QR Code ini dari riwayat?')) {
-      const next = qrList.filter((q) => q.id !== id);
-      onSaveQrList(next);
-      setActionNotice('QR Code berhasil dihapus.');
-      setTimeout(() => setActionNotice(null), 3000);
-    }
+    const target = qrList.find((q) => q.id === id);
+    const targetName = target ? ` "${target.judul}" (${target.kode})` : '';
+    const next = qrList.filter((q) => q.id !== id);
+    onSaveQrList(next);
+    setActionNotice(`QR Code Presensi${targetName} berhasil dihapus dari riwayat.`);
+    setTimeout(() => setActionNotice(null), 4000);
   };
 
   if (!isOpen) return null;
@@ -655,11 +676,13 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
                               )}
                               <button
                                 type="button"
+                                id={`btn-hapus-qr-${item.id}`}
                                 onClick={() => handleDeleteQr(item.id)}
-                                className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded border border-rose-200 text-[11px] font-semibold"
-                                title="Hapus dari riwayat"
+                                className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 text-rose-700 hover:text-rose-800 rounded border border-rose-200 hover:border-rose-300 text-[11px] font-bold flex items-center gap-1 shadow-2xs transition-colors cursor-pointer"
+                                title={`Hapus QR Code ${item.kode} dari riwayat`}
                               >
-                                Hapus
+                                <Trash2 className="w-3 h-3 text-rose-600" />
+                                <span>Hapus</span>
                               </button>
                             </div>
                           </td>
@@ -743,7 +766,7 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
                         <th className="p-3">Nama Mahasiswa</th>
                         <th className="p-3">NIM & Angkatan</th>
                         <th className="p-3">Status Presensi Sosialisasi</th>
-                        <th className="p-3 text-center">Aksi Buka Blokir</th>
+                        <th className="p-3 text-center">Aksi (Buka Blokir & Hapus)</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-200">
@@ -792,24 +815,42 @@ export const QrManagerModal: React.FC<QrManagerModalProps> = ({
                               )}
                             </td>
                             <td className="p-3 text-center">
-                              {isUnblocked ? (
+                              <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                {isUnblocked ? (
+                                  <button
+                                    type="button"
+                                    id={`btn-kunci-${cleanNim}`}
+                                    onClick={() => handleToggleUnblock(m.nim, m.nama)}
+                                    className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded border border-amber-300 text-[11px] font-bold transition-colors cursor-pointer"
+                                    title="Kunci kembali akses pendaftaran"
+                                  >
+                                    Kunci Kembali
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    id={`btn-buka-${cleanNim}`}
+                                    onClick={() => handleToggleUnblock(m.nim, m.nama)}
+                                    className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors shadow-2xs cursor-pointer flex items-center gap-1"
+                                    title="Buka blokir pendaftaran"
+                                  >
+                                    <Unlock className="w-3 h-3" />
+                                    <span>Buka Blokir</span>
+                                  </button>
+                                )}
+
+                                {/* BUTTON HAPUS (AKTIF) */}
                                 <button
                                   type="button"
-                                  onClick={() => handleToggleUnblock(m.nim, m.nama)}
-                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded border border-amber-300 text-[11px] font-bold transition-colors cursor-pointer"
+                                  id={`btn-hapus-record-${cleanNim}`}
+                                  onClick={() => handleDeleteStudentRecord(m.nim, m.nama)}
+                                  className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 hover:text-rose-800 rounded border border-rose-200 hover:border-rose-300 text-[11px] font-bold transition-colors shadow-2xs cursor-pointer flex items-center gap-1"
+                                  title={`Hapus data status presensi / unblock ${m.nama}`}
                                 >
-                                  Kunci Kembali
+                                  <Trash2 className="w-3 h-3 text-rose-600" />
+                                  <span>Hapus</span>
                                 </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleUnblock(m.nim, m.nama)}
-                                  className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold transition-colors shadow-2xs cursor-pointer flex items-center justify-center gap-1 mx-auto"
-                                >
-                                  <Unlock className="w-3 h-3" />
-                                  <span>Buka Blokir</span>
-                                </button>
-                              )}
+                              </div>
                             </td>
                           </tr>
                         );
@@ -938,6 +979,7 @@ interface QrScanGateProps {
   onVerifySuccess: (kode: string) => void;
   onOpenAdminManager?: () => void;
   canManageQr: boolean;
+  isMahasiswa?: boolean;
 }
 
 export const QrScanGate: React.FC<QrScanGateProps> = ({
@@ -947,7 +989,8 @@ export const QrScanGate: React.FC<QrScanGateProps> = ({
   isUnblockedByAdmin,
   onVerifySuccess,
   onOpenAdminManager,
-  canManageQr
+  canManageQr,
+  isMahasiswa = false
 }) => {
   const [inputCode, setInputCode] = useState('');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -992,7 +1035,7 @@ export const QrScanGate: React.FC<QrScanGateProps> = ({
         setErrorMessage(
           `⚠️ KODE QR TELAH KADALUARSA! Batas waktu ${formatDurationLabel(
             matchedQr.durasiJam
-          )} telah berakhir pada ${expiredDate}. Kode ini sudah tidak berlaku. Jika Anda lupa melakukan scan saat sosialisasi, silakan hubungi Super Admin atau Admin untuk membuka blokir pendaftaran Anda.`
+          )} telah berakhir pada ${expiredDate}. Kode ini sudah tidak berlaku. Jika Anda lupa melakukan scan saat sosialisasi, silakan hubungi Admin untuk membuka blokir pendaftaran Anda.`
         );
         return;
       }
@@ -1160,62 +1203,64 @@ export const QrScanGate: React.FC<QrScanGateProps> = ({
         )}
       </div>
 
-      {/* Quick Test Bar (Memudahkan pengujian oleh user/evaluator) */}
-      <div className="mt-5 p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs space-y-2">
-        <div className="font-bold text-amber-900 flex items-center gap-1.5">
-          <HelpCircle className="w-4 h-4 text-amber-700" />
-          <span>Panduan Pengujian Sistem Batas Waktu & Buka Blokir:</span>
-        </div>
-        <p className="text-[11px] text-amber-800 leading-relaxed">
-          Sesuai ketentuan, scan code QR presensi dibatasi waktu (15, 30, 45, 60, 75, atau 90 menit). Anda dapat menguji kedua kondisi secara langsung:
-        </p>
-        <div className="flex flex-wrap items-center gap-2 pt-1">
-          {activeQr && (
-            <button
-              type="button"
-              onClick={() => {
-                setInputCode(activeQr.kode);
-                setErrorMessage(null);
-              }}
-              className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-[11px] font-bold flex items-center gap-1"
-            >
-              <span>Gunakan Kode Aktif:</span>
-              <code className="font-mono text-emerald-950 font-extrabold">{activeQr.kode}</code>
-            </button>
-          )}
+      {/* Quick Test Bar (Disembunyikan untuk role mahasiswa) */}
+      {!isMahasiswa && (
+        <div className="mt-5 p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs space-y-2">
+          <div className="font-bold text-amber-900 flex items-center gap-1.5">
+            <HelpCircle className="w-4 h-4 text-amber-700" />
+            <span>Panduan Pengujian Sistem Batas Waktu & Buka Blokir:</span>
+          </div>
+          <p className="text-[11px] text-amber-800 leading-relaxed">
+            Sesuai ketentuan, scan code QR presensi dibatasi waktu (15, 30, 45, 60, 75, atau 90 menit). Anda dapat menguji kedua kondisi secara langsung:
+          </p>
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            {activeQr && (
+              <button
+                type="button"
+                onClick={() => {
+                  setInputCode(activeQr.kode);
+                  setErrorMessage(null);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-emerald-50 text-emerald-800 border border-emerald-300 rounded text-[11px] font-bold flex items-center gap-1"
+              >
+                <span>Gunakan Kode Aktif:</span>
+                <code className="font-mono text-emerald-950 font-extrabold">{activeQr.kode}</code>
+              </button>
+            )}
 
-          {expiredQr && (
-            <button
-              type="button"
-              onClick={() => {
-                setInputCode(expiredQr.kode);
-                setErrorMessage(null);
-              }}
-              className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 rounded text-[11px] font-bold flex items-center gap-1"
-            >
-              <span>Uji Kode Kadaluarsa (30 Menit Lewat):</span>
-              <code className="font-mono text-rose-950 font-extrabold">{expiredQr.kode}</code>
-            </button>
-          )}
+            {expiredQr && (
+              <button
+                type="button"
+                onClick={() => {
+                  setInputCode(expiredQr.kode);
+                  setErrorMessage(null);
+                }}
+                className="px-2.5 py-1 bg-white hover:bg-rose-50 text-rose-800 border border-rose-300 rounded text-[11px] font-bold flex items-center gap-1"
+              >
+                <span>Uji Kode Kadaluarsa (30 Menit Lewat):</span>
+                <code className="font-mono text-rose-950 font-extrabold">{expiredQr.kode}</code>
+              </button>
+            )}
 
-          {canManageQr && onOpenAdminManager && (
-            <button
-              type="button"
-              onClick={onOpenAdminManager}
-              className="px-2.5 py-1 bg-[#002B49] text-white hover:bg-[#003865] rounded text-[11px] font-bold flex items-center gap-1 ml-auto"
-            >
-              <Unlock className="w-3 h-3 text-[#D4AF37]" />
-              <span>Kelola QR / Buka Blokir (Panel Admin)</span>
-            </button>
-          )}
+            {canManageQr && onOpenAdminManager && (
+              <button
+                type="button"
+                onClick={onOpenAdminManager}
+                className="px-2.5 py-1 bg-[#002B49] text-white hover:bg-[#003865] rounded text-[11px] font-bold flex items-center gap-1 ml-auto"
+              >
+                <Unlock className="w-3 h-3 text-[#D4AF37]" />
+                <span>Kelola QR / Buka Blokir (Panel Admin)</span>
+              </button>
+            )}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Info Buka Blokir */}
       <div className="mt-4 text-center text-xs text-slate-500">
         <span>Lupa scan saat sesi sosialisasi atau kendala teknis? </span>
         <span className="font-medium text-slate-700">
-          Super Admin atau Admin Jurusan dapat membuka blokir akun Anda secara manual melalui panel admin.
+          Hubungi Bagian Admin.
         </span>
       </div>
     </div>

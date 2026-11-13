@@ -19,8 +19,8 @@ import {
   Calendar,
   AlertCircle,
   ExternalLink,
-  ChevronRight,
-  UserPlus
+  UserPlus,
+  Briefcase
 } from 'lucide-react';
 
 interface LoginViewProps {
@@ -87,20 +87,21 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
       // Find user matching username, identifier (NIM/NIP), or email
       const matched = accounts.find((acc) => {
-        const u = acc.username.toLowerCase();
-        const inputLower = inputUser.toLowerCase();
-        const idLower = acc.identifier.toLowerCase();
-        const emailLower = acc.email.toLowerCase();
+        if (!acc) return false;
+        const u = (acc.username || '').toLowerCase();
+        const inputLower = (inputUser || '').toLowerCase();
+        const idLower = (acc.identifier || '').toLowerCase();
+        const emailLower = (acc.email || '').toLowerCase();
 
         // Also clean punctuation for NIM/NIP matching
         const cleanId = idLower.replace(/[^a-z0-9]/g, '');
         const cleanInput = inputLower.replace(/[^a-z0-9]/g, '');
 
         return (
-          u === inputLower ||
-          idLower === inputLower ||
+          (u && u === inputLower) ||
+          (idLower && idLower === inputLower) ||
           (cleanInput.length >= 4 && cleanId.includes(cleanInput)) ||
-          emailLower === inputLower
+          (emailLower && emailLower === inputLower)
         );
       });
 
@@ -158,11 +159,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       }
 
       // Check fallback in PREDEFINED_ACCOUNTS
+      const inputLower = (inputUser || '').toLowerCase();
       const predefinedMatch = Object.values(PREDEFINED_ACCOUNTS).find(
         (p) =>
-          p.username.toLowerCase() === inputUser.toLowerCase() ||
-          p.email.toLowerCase() === inputUser.toLowerCase() ||
-          p.identifier.toLowerCase().includes(inputUser.toLowerCase())
+          (p.username && p.username.toLowerCase() === inputLower) ||
+          (p.email && p.email.toLowerCase() === inputLower) ||
+          (p.identifier && p.identifier.toLowerCase().includes(inputLower))
       );
 
       if (predefinedMatch) {
@@ -181,45 +183,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       // User not found
       setErrorMessage(`Akun dengan ID/Username "${username}" tidak ditemukan. Pastikan akun telah didaftarkan pada Konfigurasi Pengguna SIKMA.`);
     }, 350);
-  };
-
-  const handleQuickLogin = (role: UserRole) => {
-    setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
-      const accounts = getUserAccounts();
-      const matched = accounts.find((a) => a.role === role && a.status === 'Aktif') || accounts.find((a) => a.role === role);
-
-      if (matched) {
-        const nowStr = 'Hari ini, ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
-        const updatedAccounts = accounts.map((item) =>
-          item.id === matched.id ? { ...item, terakhirLogin: nowStr } : item
-        );
-        localStorage.setItem('sikma_user_accounts', JSON.stringify(updatedAccounts));
-
-        onLoginSuccess({
-          id: matched.id,
-          username: matched.username,
-          nama: matched.nama,
-          role: matched.role,
-          identifier: matched.identifier,
-          email: matched.email,
-          avatarText: matched.avatarText,
-          unit: matched.unit,
-          jabatan: matched.jabatan,
-          lastLogin: nowStr
-        });
-      } else {
-        const user = PREDEFINED_ACCOUNTS[role];
-        onLoginSuccess({
-          ...user,
-          lastLogin: new Date().toLocaleString('id-ID', {
-            dateStyle: 'medium',
-            timeStyle: 'short'
-          })
-        });
-      }
-    }, 300);
   };
 
   const roleConfigs = [
@@ -249,6 +212,15 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       color: 'from-blue-600 to-sky-700',
       badgeBg: 'bg-blue-100 text-blue-800 border-blue-200',
       activeBorder: 'border-blue-600 bg-blue-50/50'
+    },
+    {
+      role: 'eksternal' as UserRole,
+      title: 'User Eksternal',
+      subtitle: 'Pembimbing Lapangan KLK',
+      icon: Briefcase,
+      color: 'from-amber-600 to-amber-800',
+      badgeBg: 'bg-amber-100 text-amber-900 border-amber-300',
+      activeBorder: 'border-amber-600 bg-amber-50/50'
     },
     {
       role: 'mahasiswa' as UserRole,
@@ -379,38 +351,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                       Gunakan kredensial akun SSO Universitas Brawijaya
                     </p>
                   </div>
-
-                  <div className="w-12 h-12 rounded-xl bg-white/10 border border-white/20 flex items-center justify-center font-bold text-lg text-[#D4AF37] shadow-inner">
-                    {currentAccount.avatarText}
-                  </div>
                 </div>
               </div>
 
               {/* Login Form */}
               <div className="p-6 sm:p-8 space-y-6">
-                {/* Active Preset User Preview Banner */}
-                <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <div className="text-[11px] text-slate-500 font-medium">
-                      Pengguna Terpilih:
-                    </div>
-                    <div className="text-xs font-bold text-slate-900">
-                      {currentAccount.nama}
-                    </div>
-                    <div className="text-[11px] text-[#002B49] font-semibold">
-                      {currentAccount.identifier}
-                    </div>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleQuickLogin(selectedRole)}
-                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-[#002B49] text-[#D4AF37] hover:bg-[#003865] transition-colors shadow-sm flex items-center space-x-1"
-                  >
-                    <span>1-Klik Masuk</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-
                 {errorMessage && (
                   <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs flex items-center space-x-2">
                     <AlertCircle className="w-4 h-4 flex-shrink-0 text-rose-600" />
