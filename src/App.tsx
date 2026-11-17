@@ -3,7 +3,21 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { auth, onAuthStateChanged, signOut, FirebaseUser } from './firebase';
+import {
+  createEmptyRemoteSyncMeta,
+  subscribeSikmaCollections,
+  syncKlkListToFirestore,
+  syncUsersListToFirestore,
+  syncSdmCategoryToFirestore,
+  syncLogbooksToFirestore,
+  syncSeminarsToFirestore,
+  syncSuratListToFirestore,
+  syncPengumumanListToFirestore,
+  checkCollectionHasDocs,
+  isBootstrappedAdminEmail
+} from './utils/firestoreSync';
 import {
   ActiveTab,
   UserRole,
@@ -133,6 +147,21 @@ export const syncKlkWithMahasiswaList = (
 };
 
 export default function App() {
+  // Firebase Auth & Firestore Sync Refs
+  const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
+  const remoteMetaRef = useRef(createEmptyRemoteSyncMeta());
+  const isApplyingRemoteRef = useRef<boolean>(false);
+  const hasSeededCloudRef = useRef<boolean>(false);
+
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (fbUser) => {
+      setFirebaseUser(fbUser);
+      setIsAuthReady(true);
+    });
+    return () => unsub();
+  }, []);
+
   // Authentication State (always start on Login Page; session persistence disabled)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
@@ -310,7 +339,17 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
 
   const [klkList, setKlkList] = useState<PengajuanKLK[]>(() => {
     try {
-      localStorage.removeItem('sikma_klk_data');
+      const emptiedFlag = localStorage.getItem('sikma_klk_emptied_once_v1');
+      if (!emptiedFlag) {
+        localStorage.removeItem('sikma_klk_data');
+        localStorage.setItem('sikma_klk_emptied_once_v1', 'true');
+        return [];
+      }
+      const saved = localStorage.getItem('sikma_klk_data');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      }
     } catch {}
     return [];
   });
@@ -444,6 +483,259 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
   useEffect(() => {
     localStorage.setItem('sikma_user_accounts', JSON.stringify(userList));
   }, [userList]);
+
+  // Real-time Firestore Subscription (only attached when auth is ready & Firebase user is signed in)
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser) return;
+
+    const unsub = subscribeSikmaCollections(
+      firebaseUser,
+      currentRole,
+      remoteMetaRef.current,
+      {
+        onKlkUpdate: (remoteItems) => {
+          isApplyingRemoteRef.current = true;
+          setKlkList(remoteItems);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onUsersUpdate: (remoteUsers) => {
+          if (remoteUsers.length === 0) return;
+          isApplyingRemoteRef.current = true;
+          setUserList((prev) => {
+            const byId = new Map<string, UserAccountItem>(prev.map((u) => [u.id, u]));
+            for (const r of remoteUsers) {
+              const existingLocal = byId.get(r.id);
+              byId.set(r.id, existingLocal?.password ? { ...r, password: existingLocal.password } : r);
+            }
+            return Array.from(byId.values());
+          });
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onDosenUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setDosenList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onMahasiswaUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setMahasiswaList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onAdminUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setAdminList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onPlpUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setPlpList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onPembimbingUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setPembimbingLapanganList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onLogbooksUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setLogbooks(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onSeminarsUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setSeminarList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onSuratUpdate: (items) => {
+          isApplyingRemoteRef.current = true;
+          setSuratList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        },
+        onPengumumanUpdate: (items) => {
+          if (items.length === 0) return;
+          isApplyingRemoteRef.current = true;
+          setPengumumanList(items);
+          setTimeout(() => {
+            isApplyingRemoteRef.current = false;
+          }, 150);
+        }
+      }
+    );
+
+    // Bootstrap initial master SDM & User collections once if bootstrapped admin logs into empty Firestore
+    if (
+      !hasSeededCloudRef.current &&
+      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+    ) {
+      hasSeededCloudRef.current = true;
+      void (async () => {
+        try {
+          const hasSdm = await checkCollectionHasDocs('sdm_directory');
+          if (!hasSdm) {
+            await syncSdmCategoryToFirestore('dosen', dosenList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+            await syncSdmCategoryToFirestore('mahasiswa', mahasiswaList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+            await syncSdmCategoryToFirestore('admin', adminList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+            await syncSdmCategoryToFirestore('plp', plpList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+            await syncSdmCategoryToFirestore('pembimbing_lapangan', pembimbingLapanganList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+          }
+          await syncUsersListToFirestore(userList, firebaseUser, remoteMetaRef.current, false);
+          if (pengumumanList.length > 0) {
+            await syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, false);
+          }
+          if (!(await checkCollectionHasDocs('seminars')) && seminarList.length > 0) {
+            await syncSeminarsToFirestore(seminarList, firebaseUser, remoteMetaRef.current, false);
+          }
+          if (!(await checkCollectionHasDocs('logbooks')) && logbooks.length > 0) {
+            await syncLogbooksToFirestore(logbooks, firebaseUser, remoteMetaRef.current, false);
+          }
+          if (!(await checkCollectionHasDocs('surat_pengajuan')) && suratList.length > 0) {
+            await syncSuratListToFirestore(suratList, firebaseUser, remoteMetaRef.current, false);
+          }
+        } catch (err) {
+          console.error('Firestore initial seed warning:', err);
+        }
+      })();
+    }
+
+    return () => unsub();
+  }, [isAuthReady, firebaseUser, currentUser, currentRole]);
+
+  // Sync local mutations to Firestore when authenticated with Firebase
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    void syncKlkListToFirestore(
+      klkList,
+      firebaseUser,
+      remoteMetaRef.current,
+      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+    ).catch((err) => console.error('Sync KLK error:', err));
+  }, [klkList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncUsersListToFirestore(userList, firebaseUser, remoteMetaRef.current, true).catch((err) =>
+      console.error('Sync Users error:', err)
+    );
+  }, [userList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncSdmCategoryToFirestore(
+      'dosen',
+      dosenList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
+      firebaseUser,
+      remoteMetaRef.current,
+      true
+    ).catch((err) => console.error('Sync Dosen error:', err));
+  }, [dosenList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncSdmCategoryToFirestore(
+      'mahasiswa',
+      mahasiswaList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
+      firebaseUser,
+      remoteMetaRef.current,
+      true
+    ).catch((err) => console.error('Sync Mahasiswa error:', err));
+  }, [mahasiswaList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncSdmCategoryToFirestore(
+      'admin',
+      adminList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
+      firebaseUser,
+      remoteMetaRef.current,
+      true
+    ).catch((err) => console.error('Sync Admin error:', err));
+  }, [adminList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncSdmCategoryToFirestore(
+      'plp',
+      plpList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
+      firebaseUser,
+      remoteMetaRef.current,
+      true
+    ).catch((err) => console.error('Sync PLP error:', err));
+  }, [plpList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncSdmCategoryToFirestore(
+      'pembimbing_lapangan',
+      pembimbingLapanganList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
+      firebaseUser,
+      remoteMetaRef.current,
+      true
+    ).catch((err) => console.error('Sync Pembimbing Lapangan error:', err));
+  }, [pembimbingLapanganList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    void syncLogbooksToFirestore(
+      logbooks,
+      firebaseUser,
+      remoteMetaRef.current,
+      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+    ).catch((err) => console.error('Sync Logbooks error:', err));
+  }, [logbooks, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    void syncSeminarsToFirestore(
+      seminarList,
+      firebaseUser,
+      remoteMetaRef.current,
+      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+    ).catch((err) => console.error('Sync Seminars error:', err));
+  }, [seminarList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    void syncSuratListToFirestore(
+      suratList,
+      firebaseUser,
+      remoteMetaRef.current,
+      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+    ).catch((err) => console.error('Sync Surat error:', err));
+  }, [suratList, isAuthReady, firebaseUser, currentUser]);
+
+  useEffect(() => {
+    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    void syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, true).catch((err) =>
+      console.error('Sync Pengumuman error:', err)
+    );
+  }, [pengumumanList, isAuthReady, firebaseUser, currentUser]);
 
   // Guard: if role is restricted for active tab, redirect
   useEffect(() => {
@@ -1151,8 +1443,13 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
       )
     : undefined;
 
+  const isGoogleAuthenticated = Boolean(
+    firebaseUser && currentUser && firebaseUser.uid === currentUser.id
+  );
+
   const requiresPasswordChange = Boolean(
-    currentUser &&
+    !isGoogleAuthenticated &&
+      currentUser &&
       (activeUserAccount?.mustChangePassword ?? currentUser.mustChangePassword) &&
       !(activeUserAccount?.passwordChangedAt || currentUser.passwordChangedAt)
   );
@@ -1171,18 +1468,21 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
       }
     } catch {}
 
+    const isGoogleLogin = Boolean(auth.currentUser && auth.currentUser.uid === user.id);
     const matchedAcc = latestUsers.find(
       (u) =>
         u.id === user.id ||
         (user.username && u.username.toLowerCase() === user.username.toLowerCase())
     );
-    const isFirstLogin =
-      Boolean(user.isFirstLogin) ||
-      !matchedAcc?.terakhirLogin ||
-      matchedAcc.terakhirLogin === 'Belum pernah login';
-    const pendingChange =
-      Boolean(user.mustChangePassword || matchedAcc?.mustChangePassword || isFirstLogin) &&
-      !(user.passwordChangedAt || matchedAcc?.passwordChangedAt);
+    const isFirstLogin = isGoogleLogin
+      ? false
+      : Boolean(user.isFirstLogin) ||
+        !matchedAcc?.terakhirLogin ||
+        matchedAcc.terakhirLogin === 'Belum pernah login';
+    const pendingChange = isGoogleLogin
+      ? false
+      : Boolean(user.mustChangePassword || matchedAcc?.mustChangePassword || isFirstLogin) &&
+        !(user.passwordChangedAt || matchedAcc?.passwordChangedAt);
 
     const enrichedUser: AuthUser = {
       ...user,
@@ -1256,6 +1556,7 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
     setCurrentUser(null);
     setPasswordReminderNotice(null);
     localStorage.removeItem('sikma_auth_user');
+    void signOut(auth).catch(() => {});
     try {
       sessionStorage.removeItem('sikma_klk_form_submitted_id');
       Object.keys(sessionStorage).forEach((storageKey) => {

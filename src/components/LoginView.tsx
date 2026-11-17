@@ -4,6 +4,8 @@ import { PREDEFINED_ACCOUNTS } from '../data/authUsers';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
 import { UbLogo } from './UbLogo';
 import { verifyPassword, isHashedPassword } from '../utils/passwordPolicy';
+import { auth, googleProvider, signInWithPopup } from '../firebase';
+import { resolveOrCreateAuthUserFromGoogle } from '../utils/firestoreSync';
 import {
   FlaskConical,
   User,
@@ -25,6 +27,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
   const [showPassword, setShowPassword] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState<boolean>(false);
+
+  const handleGoogleLogin = async () => {
+    setErrorMessage('');
+    setIsGoogleLoading(true);
+    try {
+      const result = await signInWithPopup(auth, googleProvider);
+      const accounts = getUserAccounts();
+      const authUser = await resolveOrCreateAuthUserFromGoogle(result.user, accounts);
+      onLoginSuccess(authUser);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes('popup-closed-by-user')) {
+        setErrorMessage('Login Google dibatalkan sebelum selesai.');
+      } else if (msg.includes('popup-blocked')) {
+        setErrorMessage('Popup login Google diblokir oleh browser. Silakan izinkan popup untuk situs ini.');
+      } else {
+        setErrorMessage('Gagal masuk menggunakan akun Google. Silakan coba lagi.');
+      }
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
 
   // Helper to load accounts from localStorage (synced with UserConfigView)
   const getUserAccounts = (): UserAccountItem[] => {
@@ -351,8 +376,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                   <button
                     type="submit"
                     id="submit-login-btn"
-                    disabled={isLoading}
-                    className="w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#002B49] hover:bg-[#001D33] active:scale-[0.99] transition-all shadow-md flex items-center justify-center space-x-2 border border-slate-800 disabled:opacity-75"
+                    disabled={isLoading || isGoogleLoading}
+                    className="w-full py-3 px-4 rounded-xl text-xs font-bold text-white bg-[#002B49] hover:bg-[#001D33] active:scale-[0.99] transition-all shadow-md flex items-center justify-center space-x-2 border border-slate-800 disabled:opacity-75 cursor-pointer"
                   >
                     {isLoading ? (
                       <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
@@ -364,6 +389,46 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                     )}
                   </button>
                 </form>
+
+                <div className="relative flex items-center">
+                  <div className="flex-grow border-t border-slate-200"></div>
+                  <span className="flex-shrink mx-3 text-[11px] font-medium text-slate-400">atau</span>
+                  <div className="flex-grow border-t border-slate-200"></div>
+                </div>
+
+                <button
+                  type="button"
+                  id="google-login-btn"
+                  onClick={handleGoogleLogin}
+                  disabled={isLoading || isGoogleLoading}
+                  className="w-full py-2.5 px-4 rounded-xl text-xs font-bold text-slate-700 bg-white hover:bg-slate-50 active:scale-[0.99] transition-all shadow-xs flex items-center justify-center space-x-2.5 border border-slate-300 disabled:opacity-75 cursor-pointer"
+                >
+                  {isGoogleLoading ? (
+                    <div className="w-4 h-4 border-2 border-[#002B49] border-t-transparent rounded-full animate-spin"></div>
+                  ) : (
+                    <>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          fill="#4285F4"
+                          d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17z"
+                        />
+                        <path
+                          fill="#34A853"
+                          d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24z"
+                        />
+                        <path
+                          fill="#FBBC05"
+                          d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14z"
+                        />
+                        <path
+                          fill="#EA4335"
+                          d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96z"
+                        />
+                      </svg>
+                      <span>Login dengan Google</span>
+                    </>
+                  )}
+                </button>
               </div>
             </div>
           </div>

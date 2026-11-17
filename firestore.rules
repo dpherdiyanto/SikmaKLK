@@ -1,0 +1,648 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Phase 3: Global Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerified() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedAdmin() {
+      return isVerified() && request.auth.token.email == 'dp.herdiyanto@gmail.com';
+    }
+
+    function isAdmin() {
+      return isBootstrappedAdmin() ||
+        (isVerified() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isOptionalString(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    // --- Phase 2/4: Entity Validation Blueprints ---
+    function isValidAdminMember(data, adminId) {
+      return data.keys().hasAll(['uid', 'email', 'nama', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'nama', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.uid == adminId
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 200
+        && data.role in ['super_admin', 'admin']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'username', 'nama', 'role', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'username', 'nama', 'role', 'identifier', 'email',
+          'avatarText', 'unit', 'jabatan', 'status', 'noHp', 'terakhirLogin',
+          'mustChangePassword', 'passwordChangedAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.username is string && data.username.size() >= 1 && data.username.size() <= 100
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 200
+        && data.role in ['super_admin', 'admin', 'dosen', 'mahasiswa_s1', 'mahasiswa_s2', 'mahasiswa_s3', 'eksternal']
+        && data.status in ['Aktif', 'Nonaktif']
+        && isOptionalString(data, 'identifier', 100)
+        && isOptionalString(data, 'email', 200)
+        && isOptionalString(data, 'avatarText', 10)
+        && isOptionalString(data, 'unit', 300)
+        && isOptionalString(data, 'jabatan', 300)
+        && isOptionalString(data, 'noHp', 40)
+        && isOptionalString(data, 'terakhirLogin', 120)
+        && (!('mustChangePassword' in data) || data.mustChangePassword is bool)
+        && isOptionalString(data, 'passwordChangedAt', 80)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSdmDirectory(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'category', 'nama', 'isDirectoryVisible', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'category', 'nama', 'identifier', 'unit', 'jabatan',
+          'status', 'isDirectoryVisible', 'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.category in ['dosen', 'mahasiswa', 'admin', 'plp', 'pembimbing_lapangan']
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 200
+        && isOptionalString(data, 'identifier', 100)
+        && isOptionalString(data, 'unit', 300)
+        && isOptionalString(data, 'jabatan', 300)
+        && isOptionalString(data, 'status', 60)
+        && data.isDirectoryVisible is bool
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSdmPrivate(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'email', 'noHp', 'noHpOrangTua', 'alamat', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && isOptionalString(data, 'email', 200)
+        && isOptionalString(data, 'noHp', 40)
+        && isOptionalString(data, 'noHpOrangTua', 40)
+        && isOptionalString(data, 'alamat', 500)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidKlkSubmission(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'mahasiswaNama', 'nim', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'assignedDosenUid', 'assignedDpaUid', 'pembimbingLapanganUid',
+          'mahasiswaId', 'mahasiswaNama', 'nim', 'skema', 'instansiNama', 'status',
+          'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && isOptionalString(data, 'assignedDosenUid', 128)
+        && isOptionalString(data, 'assignedDpaUid', 128)
+        && isOptionalString(data, 'pembimbingLapanganUid', 128)
+        && isOptionalString(data, 'mahasiswaId', 128)
+        && data.mahasiswaNama is string && data.mahasiswaNama.size() >= 1 && data.mahasiswaNama.size() <= 200
+        && data.nim is string && data.nim.size() >= 1 && data.nim.size() <= 60
+        && isOptionalString(data, 'skema', 120)
+        && isOptionalString(data, 'instansiNama', 250)
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 80
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidLabLogbook(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'assignedDosenUid', 'mahasiswaNama', 'nim', 'status',
+          'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && isOptionalString(data, 'assignedDosenUid', 128)
+        && isOptionalString(data, 'mahasiswaNama', 200)
+        && isOptionalString(data, 'nim', 60)
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 60
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSeminarSchedule(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'isPublicSchedule', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'isPublicSchedule', 'mahasiswaNama', 'nim', 'status',
+          'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.isPublicSchedule is bool
+        && isOptionalString(data, 'mahasiswaNama', 200)
+        && isOptionalString(data, 'nim', 60)
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 60
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSuratRequest(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'mahasiswaNama', 'nim', 'jenisSurat', 'status',
+          'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && isOptionalString(data, 'mahasiswaNama', 200)
+        && isOptionalString(data, 'nim', 60)
+        && isOptionalString(data, 'jenisSurat', 160)
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 60
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'isPublicAnnouncement', 'judul', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'isPublicAnnouncement', 'judul', 'kategori', 'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.isPublicAnnouncement is bool
+        && data.judul is string && data.judul.size() >= 1 && data.judul.size() <= 250
+        && isOptionalString(data, 'kategori', 80)
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidThesisRecord(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'mahasiswaNama', 'nim', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'assignedDosenUid', 'mahasiswaNama', 'nim', 'status',
+          'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && isOptionalString(data, 'assignedDosenUid', 128)
+        && data.mahasiswaNama is string && data.mahasiswaNama.size() >= 1 && data.mahasiswaNama.size() <= 200
+        && data.nim is string && data.nim.size() >= 1 && data.nim.size() <= 60
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 80
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAgendaEvent(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'isPublicAgenda', 'judul', 'status', 'data', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'ownerUid', 'isPublicAgenda', 'judul', 'status', 'data', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.isPublicAgenda is bool
+        && data.judul is string && data.judul.size() >= 1 && data.judul.size() <= 250
+        && data.status is string && data.status.size() >= 1 && data.status.size() <= 60
+        && data.data is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidSystemConfig(data) {
+      return data.keys().hasAll(['id', 'ownerUid', 'isConfigDoc', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'ownerUid', 'isConfigDoc', 'items', 'payload', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.ownerUid)
+        && data.isConfigDoc is bool
+        && (!('items' in data) || (data.items is list && data.items.size() <= 1000))
+        && (!('payload' in data) || data.payload is map)
+        && data.updatedAt is timestamp;
+    }
+
+    // --- Collection Rules ---
+
+    // 0. Health Connection Check Document (read-only single doc ping)
+    match /test/connection {
+      allow get: if isSignedIn();
+    }
+
+    // 1. Admins Registry
+    match /admins/{adminId} {
+      allow get: if isVerified() && (adminId == request.auth.uid || isAdmin());
+      allow list: if isBootstrappedAdmin() || (isVerified() && existing().uid == request.auth.uid);
+      allow create: if isBootstrappedAdmin()
+        && isValidId(adminId)
+        && isValidAdminMember(incoming(), adminId)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isBootstrappedAdmin()
+        && isValidId(adminId)
+        && isValidAdminMember(incoming(), adminId)
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'nama', 'role', 'updatedAt']);
+      allow delete: if isBootstrappedAdmin() && isValidId(adminId);
+    }
+
+    // 2. Users (PII-Restricted)
+    match /users/{userId} {
+      allow get: if isVerified() && isValidId(userId) && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (isBootstrappedAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isVerified()
+        && isValidId(userId)
+        && isValidUserAccount(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (incoming().ownerUid == request.auth.uid && incoming().role == 'mahasiswa_s1')
+        );
+      allow update: if isVerified()
+        && isValidId(userId)
+        && isValidUserAccount(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().ownerUid == existing().ownerUid
+            && incoming().role == existing().role
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'nama', 'avatarText', 'unit', 'jabatan', 'noHp',
+              'terakhirLogin', 'mustChangePassword', 'passwordChangedAt', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(userId);
+    }
+
+    // 3. SDM Directory (Non-PII)
+    match /sdm_directory/{profileId} {
+      allow get: if isVerified() && isValidId(profileId) && (existing().isDirectoryVisible == true || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().isDirectoryVisible == true || existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isAdmin()
+        && isValidId(profileId)
+        && isValidSdmDirectory(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isVerified()
+        && isValidId(profileId)
+        && isValidSdmDirectory(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().ownerUid == existing().ownerUid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['nama', 'unit', 'jabatan', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(profileId);
+    }
+
+    // 4. SDM Private PII
+    match /sdm_private/{profileId} {
+      allow get: if isVerified() && isValidId(profileId) && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerified()
+        && isValidId(profileId)
+        && isValidSdmPrivate(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(profileId)
+        && isValidSdmPrivate(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'noHp', 'noHpOrangTua', 'alamat', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(profileId);
+    }
+
+    // 5. KLK Submissions
+    match /klk_submissions/{klkId} {
+      allow get: if isVerified() && isValidId(klkId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        existing().assignedDpaUid == request.auth.uid ||
+        existing().pembimbingLapanganUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerified() && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        existing().assignedDpaUid == request.auth.uid ||
+        existing().pembimbingLapanganUid == request.auth.uid ||
+        isBootstrappedAdmin()
+      );
+      allow create: if isVerified()
+        && isValidId(klkId)
+        && isValidKlkSubmission(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(klkId)
+        && isValidKlkSubmission(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Selesai'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['skema', 'instansiNama', 'status', 'data', 'updatedAt'])
+          ) ||
+          (
+            (existing().assignedDosenUid == request.auth.uid ||
+             existing().assignedDpaUid == request.auth.uid ||
+             existing().pembimbingLapanganUid == request.auth.uid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isVerified() && isValidId(klkId) && (
+        isAdmin() || (existing().ownerUid == request.auth.uid && existing().status == 'Draft')
+      );
+    }
+
+    // 6. Lab Logbooks
+    match /logbooks/{logbookId} {
+      allow get: if isVerified() && isValidId(logbookId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerified() && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isBootstrappedAdmin()
+      );
+      allow create: if isVerified()
+        && isValidId(logbookId)
+        && isValidLabLogbook(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(logbookId)
+        && isValidLabLogbook(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Disetujui'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          ) ||
+          (
+            existing().assignedDosenUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(logbookId);
+    }
+
+    // 7. Seminar Schedules
+    match /seminars/{seminarId} {
+      allow get: if isVerified() && isValidId(seminarId) && (existing().isPublicSchedule == true || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().isPublicSchedule == true || existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerified()
+        && isValidId(seminarId)
+        && isValidSeminarSchedule(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(seminarId)
+        && isValidSeminarSchedule(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Selesai'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(seminarId);
+    }
+
+    // 8. Surat Pengajuan
+    match /surat_pengajuan/{suratId} {
+      allow get: if isVerified() && isValidId(suratId) && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerified()
+        && isValidId(suratId)
+        && isValidSuratRequest(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(suratId)
+        && isValidSuratRequest(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Selesai'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['jenisSurat', 'status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(suratId);
+    }
+
+    // 9. Pengumuman
+    match /pengumuman/{pengumumanId} {
+      allow get: if isVerified() && isValidId(pengumumanId) && (existing().isPublicAnnouncement == true || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().isPublicAnnouncement == true || existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isAdmin()
+        && isValidId(pengumumanId)
+        && isValidAnnouncement(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(pengumumanId)
+        && isValidAnnouncement(incoming())
+        && incoming().id == existing().id
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isPublicAnnouncement', 'judul', 'kategori', 'data', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(pengumumanId);
+    }
+
+    // 10. Skripsi S1 Records
+    match /skripsi_records/{skripsiId} {
+      allow get: if isVerified() && isValidId(skripsiId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerified() && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isBootstrappedAdmin()
+      );
+      allow create: if isVerified()
+        && isValidId(skripsiId)
+        && isValidThesisRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(skripsiId)
+        && isValidThesisRecord(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Selesai'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          ) ||
+          (
+            existing().assignedDosenUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(skripsiId);
+    }
+
+    // 11. Tesis S2 Records
+    match /tesis_records/{tesisId} {
+      allow get: if isVerified() && isValidId(tesisId) && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isAdmin()
+      );
+      allow list: if isVerified() && (
+        existing().ownerUid == request.auth.uid ||
+        existing().assignedDosenUid == request.auth.uid ||
+        isBootstrappedAdmin()
+      );
+      allow create: if isVerified()
+        && isValidId(tesisId)
+        && isValidThesisRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(tesisId)
+        && isValidThesisRecord(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && existing().status != 'Selesai'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          ) ||
+          (
+            existing().assignedDosenUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(tesisId);
+    }
+
+    // 12. Agendas
+    match /agendas/{agendaId} {
+      allow get: if isVerified() && isValidId(agendaId) && (existing().isPublicAgenda == true || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerified() && (existing().isPublicAgenda == true || existing().ownerUid == request.auth.uid || isBootstrappedAdmin());
+      allow create: if isVerified()
+        && isValidId(agendaId)
+        && isValidAgendaEvent(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isVerified()
+        && isValidId(agendaId)
+        && isValidAgendaEvent(incoming())
+        && incoming().id == existing().id
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          isAdmin() ||
+          (
+            existing().ownerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['judul', 'status', 'data', 'updatedAt'])
+          )
+        );
+      allow delete: if isAdmin() && isValidId(agendaId);
+    }
+
+    // 13. System Configs (Master Reference Tables)
+    match /system_configs/{configId} {
+      allow get: if isVerified() && isValidId(configId) && (existing().isConfigDoc == true || isAdmin());
+      allow list: if isVerified() && (existing().isConfigDoc == true || isBootstrappedAdmin());
+      allow create: if isAdmin()
+        && isValidId(configId)
+        && isValidSystemConfig(incoming())
+        && incoming().updatedAt == request.time;
+      allow update: if isAdmin()
+        && isValidId(configId)
+        && isValidSystemConfig(incoming())
+        && incoming().id == existing().id
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['isConfigDoc', 'items', 'payload', 'updatedAt']);
+      allow delete: if isAdmin() && isValidId(configId);
+    }
+  }
+}

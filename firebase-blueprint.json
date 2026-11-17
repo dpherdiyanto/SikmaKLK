@@ -1,0 +1,277 @@
+{
+  "entities": {
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized SIKMA administrator registry keyed by Firebase Auth UID.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "nama": { "type": "string", "maxLength": 200 },
+        "role": { "type": "string", "enum": ["super_admin", "admin"], "maxLength": 32 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "nama", "role", "createdAt", "updatedAt"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Private user account & authentication profile in SIKMA Kimia UB.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "username": { "type": "string", "maxLength": 100 },
+        "nama": { "type": "string", "maxLength": 200 },
+        "role": {
+          "type": "string",
+          "enum": ["super_admin", "admin", "dosen", "mahasiswa_s1", "mahasiswa_s2", "mahasiswa_s3", "eksternal"],
+          "maxLength": 32
+        },
+        "identifier": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 200 },
+        "avatarText": { "type": "string", "maxLength": 10 },
+        "unit": { "type": "string", "maxLength": 300 },
+        "jabatan": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["Aktif", "Nonaktif"], "maxLength": 20 },
+        "noHp": { "type": "string", "maxLength": 40 },
+        "terakhirLogin": { "type": "string", "maxLength": 120 },
+        "mustChangePassword": { "type": "boolean" },
+        "passwordChangedAt": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "username", "nama", "role", "status", "createdAt", "updatedAt"]
+    },
+    "SdmDirectoryItem": {
+      "title": "SdmDirectoryItem",
+      "description": "Publicly readable academic SDM directory entry (without PII like phone/personal email).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": {
+          "type": "string",
+          "enum": ["dosen", "mahasiswa", "admin", "plp", "pembimbing_lapangan"],
+          "maxLength": 40
+        },
+        "nama": { "type": "string", "maxLength": 200 },
+        "identifier": { "type": "string", "maxLength": 100 },
+        "unit": { "type": "string", "maxLength": 300 },
+        "jabatan": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "maxLength": 60 },
+        "isDirectoryVisible": { "type": "boolean" },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "category", "nama", "isDirectoryVisible", "data", "createdAt", "updatedAt"]
+    },
+    "SdmPrivateItem": {
+      "title": "SdmPrivateItem",
+      "description": "Isolated PII (email, phone, address) for an SDM profile.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "maxLength": 200 },
+        "noHp": { "type": "string", "maxLength": 40 },
+        "noHpOrangTua": { "type": "string", "maxLength": 40 },
+        "alamat": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "KlkSubmission": {
+      "title": "KlkSubmission",
+      "description": "KLK student submission, guidance, logbooks, attendance, and assessments.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "assignedDosenUid": { "type": "string", "maxLength": 128 },
+        "assignedDpaUid": { "type": "string", "maxLength": 128 },
+        "pembimbingLapanganUid": { "type": "string", "maxLength": 128 },
+        "mahasiswaId": { "type": "string", "maxLength": 128 },
+        "mahasiswaNama": { "type": "string", "maxLength": 200 },
+        "nim": { "type": "string", "maxLength": 60 },
+        "skema": { "type": "string", "maxLength": 120 },
+        "instansiNama": { "type": "string", "maxLength": 250 },
+        "status": { "type": "string", "maxLength": 80 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "mahasiswaNama", "nim", "status", "data", "createdAt", "updatedAt"]
+    },
+    "LabLogbook": {
+      "title": "LabLogbook",
+      "description": "Research / laboratory logbook entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "assignedDosenUid": { "type": "string", "maxLength": 128 },
+        "mahasiswaNama": { "type": "string", "maxLength": 200 },
+        "nim": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "maxLength": 60 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "status", "data", "createdAt", "updatedAt"]
+    },
+    "SeminarSchedule": {
+      "title": "SeminarSchedule",
+      "description": "Seminar and thesis defense schedule entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isPublicSchedule": { "type": "boolean" },
+        "mahasiswaNama": { "type": "string", "maxLength": 200 },
+        "nim": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "maxLength": 60 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "isPublicSchedule", "status", "data", "createdAt", "updatedAt"]
+    },
+    "SuratRequest": {
+      "title": "SuratRequest",
+      "description": "Student administrative letter request record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "mahasiswaNama": { "type": "string", "maxLength": 200 },
+        "nim": { "type": "string", "maxLength": 60 },
+        "jenisSurat": { "type": "string", "maxLength": 160 },
+        "status": { "type": "string", "maxLength": 60 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "status", "data", "createdAt", "updatedAt"]
+    },
+    "AnnouncementItem": {
+      "title": "AnnouncementItem",
+      "description": "Department announcement post.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isPublicAnnouncement": { "type": "boolean" },
+        "judul": { "type": "string", "maxLength": 250 },
+        "kategori": { "type": "string", "maxLength": 80 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "isPublicAnnouncement", "judul", "data", "createdAt", "updatedAt"]
+    },
+    "ThesisRecord": {
+      "title": "ThesisRecord",
+      "description": "Undergraduate Skripsi S1 or Magister Tesis S2 submission & guidance record.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "assignedDosenUid": { "type": "string", "maxLength": 128 },
+        "mahasiswaNama": { "type": "string", "maxLength": 200 },
+        "nim": { "type": "string", "maxLength": 60 },
+        "status": { "type": "string", "maxLength": 80 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "mahasiswaNama", "nim", "status", "data", "createdAt", "updatedAt"]
+    },
+    "AgendaEvent": {
+      "title": "AgendaEvent",
+      "description": "Department room reservation & activity agenda entry.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isPublicAgenda": { "type": "boolean" },
+        "judul": { "type": "string", "maxLength": 250 },
+        "status": { "type": "string", "maxLength": 60 },
+        "data": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "isPublicAgenda", "judul", "status", "data", "createdAt", "updatedAt"]
+    },
+    "SystemConfigDoc": {
+      "title": "SystemConfigDoc",
+      "description": "Department-wide reference configuration document (semesters, ruangan, instansi, jajaran, rbac, arsip, lab).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "isConfigDoc": { "type": "boolean" },
+        "items": { "type": "array" },
+        "payload": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "ownerUid", "isConfigDoc", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized SIKMA administrator documents."
+    },
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "User accounts and role profiles."
+    },
+    "/sdm_directory/{profileId}": {
+      "schema": { "$ref": "#/entities/SdmDirectoryItem" },
+      "description": "Non-PII directory records for Dosen, Mahasiswa, Admin, PLP, Pembimbing Lapangan."
+    },
+    "/sdm_private/{profileId}": {
+      "schema": { "$ref": "#/entities/SdmPrivateItem" },
+      "description": "Isolated PII (email, phone, address) for SDM profiles."
+    },
+    "/klk_submissions/{klkId}": {
+      "schema": { "$ref": "#/entities/KlkSubmission" },
+      "description": "KLK student submissions, verification, logbooks, attendance, and grades."
+    },
+    "/logbooks/{logbookId}": {
+      "schema": { "$ref": "#/entities/LabLogbook" },
+      "description": "Research and laboratory logbooks."
+    },
+    "/seminars/{seminarId}": {
+      "schema": { "$ref": "#/entities/SeminarSchedule" },
+      "description": "Seminar and thesis defense schedules."
+    },
+    "/surat_pengajuan/{suratId}": {
+      "schema": { "$ref": "#/entities/SuratRequest" },
+      "description": "Student administrative letter requests."
+    },
+    "/pengumuman/{pengumumanId}": {
+      "schema": { "$ref": "#/entities/AnnouncementItem" },
+      "description": "Department announcements."
+    },
+    "/skripsi_records/{skripsiId}": {
+      "schema": { "$ref": "#/entities/ThesisRecord" },
+      "description": "Undergraduate S1 Skripsi records."
+    },
+    "/tesis_records/{tesisId}": {
+      "schema": { "$ref": "#/entities/ThesisRecord" },
+      "description": "Magister S2 Tesis records."
+    },
+    "/agendas/{agendaId}": {
+      "schema": { "$ref": "#/entities/AgendaEvent" },
+      "description": "Department event & room agenda entries."
+    },
+    "/system_configs/{configId}": {
+      "schema": { "$ref": "#/entities/SystemConfigDoc" },
+      "description": "Department configuration documents (semesters, ruangan, instansi, jajaran, arsip, rbac, lab)."
+    }
+  }
+}
