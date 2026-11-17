@@ -32,7 +32,7 @@ export const PREDEFINED_ACCOUNTS: Record<UserRole, PredefinedAccount> = {
   },
   admin: {
     id: 'user-admin',
-    username: 'admin',
+    username: '198504122010121004',
     nama: 'Biro Administrasi & Laboran Kimia',
     role: 'admin',
     identifier: 'NIP. 198504122010121004',
@@ -53,7 +53,7 @@ export const PREDEFINED_ACCOUNTS: Record<UserRole, PredefinedAccount> = {
   },
   dosen: {
     id: 'user-dosen',
-    username: 'dosen',
+    username: '197405102000031002',
     nama: 'Akhmad Sabarudin, S.Si., M.Sc., Dr.Sc.',
     role: 'dosen',
     identifier: 'NIP. 197405102000031002',
@@ -72,25 +72,67 @@ export const PREDEFINED_ACCOUNTS: Record<UserRole, PredefinedAccount> = {
       'Persetujuan Rencana Studi KLK & Penilaian Industri'
     ]
   },
-  mahasiswa: {
+  mahasiswa_s1: {
     id: 'user-mhs',
-    username: 'mahasiswa',
+    username: '215090200111012',
     nama: 'Ahmad Rizky Pratama',
-    role: 'mahasiswa',
+    role: 'mahasiswa_s1',
     identifier: 'NIM. 215090200111012',
     email: 'ahmad.rizky@student.ub.ac.id',
     avatarText: 'AR',
     unit: 'Program Studi S1 Kimia - Angkatan 2021',
-    jabatan: 'Mahasiswa Aktif (Semester 7 - Skripsi & KLK)',
+    jabatan: 'Mahasiswa S1 Aktif (Semester 7 - Skripsi & KLK)',
     passwordHint: 'Mhs#2024',
-    badgeLabel: 'Mahasiswa',
+    badgeLabel: 'Mahasiswa S1',
     badgeColor: 'bg-emerald-600 text-white border-emerald-500',
-    deskripsiPeran: 'Pengajuan judul riset skripsi, pengisian logbook harian instrumen lab, pendaftaran kegiatan luar kampus (KLK/MBKM), dan pengajuan surat izin.',
+    deskripsiPeran: 'Pengajuan judul riset skripsi S1, pengisian logbook harian instrumen lab, pendaftaran kegiatan luar kampus (KLK/MBKM), dan pengajuan surat izin.',
     fiturUtama: [
       'Pencatatan Logbook Laboratorium Kimia & Foto Eksperimen',
       'Pendaftaran & Cetak Form Resmi KLK / PKL Mitra Industri',
       'Pengajuan Surat Izin Penelitian & Permohonan Bebas Lab',
-      'Pemantauan Jadwal Seminar Proposal / Ujian Skripsi'
+      'Pemantauan Jadwal Seminar Proposal / Ujian Skripsi S1'
+    ]
+  },
+  mahasiswa_s2: {
+    id: 'user-mhs-s2',
+    username: '256090200111001',
+    nama: 'Citra Dewi Wulandari, S.Si.',
+    role: 'mahasiswa_s2',
+    identifier: 'NIM. 256090200111001',
+    email: 'citra.wulandari@student.ub.ac.id',
+    avatarText: 'CD',
+    unit: 'Program Studi S2 Kimia - Angkatan 2025',
+    jabatan: 'Mahasiswa S2 Magister Kimia (Semester 3 - Tesis)',
+    passwordHint: 'Mhs#2024',
+    badgeLabel: 'Mahasiswa S2',
+    badgeColor: 'bg-teal-600 text-white border-teal-500',
+    deskripsiPeran: 'Pengajuan topik & pembimbing tesis magister S2, pengisian logbook penelitian laboratorium lanjutan, peminjaman instrumen analitik, dan seminar hasil tesis.',
+    fiturUtama: [
+      'Pengajuan Judul Tesis S2 & Penetapan Komisi Pembimbing',
+      'Pencatatan Logbook Riset Magister & Bon Instrumen Lab',
+      'Pengajuan Surat Izin Penelitian Tesis & Bebas Lab',
+      'Pemantauan Jadwal Seminar Proposal & Sidang Tesis S2'
+    ]
+  },
+  mahasiswa_s3: {
+    id: 'user-mhs-s3',
+    username: '257090200111002',
+    nama: 'Irfan Maulana, M.Si.',
+    role: 'mahasiswa_s3',
+    identifier: 'NIM. 257090200111002',
+    email: 'irfan.maulana@student.ub.ac.id',
+    avatarText: 'IM',
+    unit: 'Program Studi S3 Kimia - Angkatan 2025',
+    jabatan: 'Mahasiswa S3 Doktor Kimia (Semester 3 - Disertasi)',
+    passwordHint: 'Mhs#2024',
+    badgeLabel: 'Mahasiswa S3',
+    badgeColor: 'bg-cyan-700 text-white border-cyan-500',
+    deskripsiPeran: 'Pengajuan riset disertasi doktor S3, logbook riset laboratorium terintegrasi, peminjaman alat dan reagen khusus, serta layanan surat akademik pascasarjana.',
+    fiturUtama: [
+      'Pengajuan Riset Disertasi S3 & Konsultasi Promotor',
+      'Pencatatan Logbook Riset Doktor & Bon Alat / Bahan Kimia',
+      'Pengajuan Surat Tugas Riset & Rekomendasi Publikasi',
+      'Pemantauan Jadwal Ujian Kualifikasi & Sidang Disertasi'
     ]
   },
   eksternal: {

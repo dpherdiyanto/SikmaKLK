@@ -6,7 +6,8 @@ import {
   UserRole,
   AuthUser,
   TujuanPeminjamanAlat,
-  AlatTambahanItem
+  AlatTambahanItem,
+  isMahasiswaRole
 } from '../../types/sikma';
 import {
   ClipboardList,
@@ -173,7 +174,7 @@ export const BonAlatTab: React.FC<BonAlatTabProps> = ({
 
   // Helper to check if bon record belongs to the logged-in student
   const isOwnRecord = (item: BonAlatItem): boolean => {
-    if (currentRole !== 'mahasiswa') return true;
+    if (!isMahasiswaRole(currentRole)) return true;
     if (!currentUser) return true;
 
     const curName = (currentUser.nama || '').trim().toLowerCase();
@@ -195,7 +196,7 @@ export const BonAlatTab: React.FC<BonAlatTabProps> = ({
   // Search & Filter
   const filteredBon = bonList.filter((item) => {
     // Role Mahasiswa hanya melihat data dirinya sendiri
-    if (currentRole === 'mahasiswa' && !isOwnRecord(item)) {
+    if (isMahasiswaRole(currentRole) && !isOwnRecord(item)) {
       return false;
     }
 
@@ -665,7 +666,7 @@ NIP.                                        NIP.
       </div>
 
       {/* Banner Khusus Mahasiswa: Privasi & Hak Akses Data Milik Sendiri */}
-      {currentRole === 'mahasiswa' && (
+      {isMahasiswaRole(currentRole) && (
         <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 flex items-center justify-between gap-3 text-xs text-sky-900 shadow-2xs">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
@@ -710,7 +711,7 @@ NIP.                                        NIP.
               <span>Buat Peminjaman</span>
             </button>
 
-            {currentRole !== 'mahasiswa' && (
+            {!isMahasiswaRole(currentRole) && (
               <button
                 onClick={handleOpenEksternal}
                 className="flex items-center gap-1.5 px-3.5 py-2 bg-emerald-700 text-white rounded-xl text-xs font-semibold hover:bg-emerald-800 shadow-xs transition-colors cursor-pointer"
@@ -958,21 +959,21 @@ NIP.                                        NIP.
                   <input
                     type="text"
                     required
-                    readOnly={currentRole === 'mahasiswa'}
+                    readOnly={isMahasiswaRole(currentRole)}
                     value={internalForm.namaMahasiswa}
                     onChange={(e) => {
-                      if (currentRole === 'mahasiswa') return;
+                      if (isMahasiswaRole(currentRole)) return;
                       setInternalForm({ ...internalForm, namaMahasiswa: e.target.value });
                       setInternalError('');
                     }}
                     className={`w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none ${
-                      currentRole === 'mahasiswa'
+                      isMahasiswaRole(currentRole)
                         ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                         : 'bg-white focus:ring-2 focus:ring-[#002B49]/20'
                     }`}
                     placeholder="Nama lengkap mahasiswa"
                   />
-                  {currentRole === 'mahasiswa' && (
+                  {isMahasiswaRole(currentRole) && (
                     <p className="text-[10px] text-slate-500 mt-1">Sesuai nama profil akun login</p>
                   )}
                 </div>
@@ -981,21 +982,21 @@ NIP.                                        NIP.
                   <input
                     type="text"
                     required
-                    readOnly={currentRole === 'mahasiswa'}
+                    readOnly={isMahasiswaRole(currentRole)}
                     value={internalForm.identitasPeminjam}
                     onChange={(e) => {
-                      if (currentRole === 'mahasiswa') return;
+                      if (isMahasiswaRole(currentRole)) return;
                       setInternalForm({ ...internalForm, identitasPeminjam: e.target.value });
                       setInternalError('');
                     }}
                     className={`w-full px-3 py-2 rounded-lg border border-slate-200 text-xs font-mono focus:outline-none ${
-                      currentRole === 'mahasiswa'
+                      isMahasiswaRole(currentRole)
                         ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                         : 'bg-white focus:ring-2 focus:ring-[#002B49]/20'
                     }`}
                     placeholder="NIM. 215090200..."
                   />
-                  {currentRole === 'mahasiswa' && (
+                  {isMahasiswaRole(currentRole) && (
                     <p className="text-[10px] text-slate-500 mt-1">Sesuai nomor identitas mahasiswa</p>
                   )}
                 </div>

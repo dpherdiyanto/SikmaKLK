@@ -6,7 +6,8 @@ import {
   Dosen,
   PLPStaff,
   AdminStaff,
-  Mahasiswa
+  Mahasiswa,
+  isMahasiswaRole
 } from '../../types/sikma';
 import { INITIAL_DOSEN } from '../../data/mockData';
 import { INITIAL_PLP_LIST } from '../../data/plpList';
@@ -908,7 +909,7 @@ export const DataLabTab: React.FC<DataLabTabProps> = ({
                     {/* FIELD 3: Aksi */}
                     <td className="py-4 px-5 text-right">
                       <div className="flex flex-wrap items-center justify-end gap-1.5">
-                        {currentRole === 'mahasiswa' ? (
+                        {isMahasiswaRole(currentRole) ? (
                           /* Role Mahasiswa HANYA BISA akses button View */
                           <button
                             onClick={() => setSelectedLabDetail(lab)}
@@ -1158,7 +1159,7 @@ export const DataLabTab: React.FC<DataLabTabProps> = ({
             {/* Detail Modal Action Footer */}
             <div className="pt-3 border-t border-slate-100 flex flex-wrap justify-between items-center gap-2">
               <div className="flex flex-wrap gap-2">
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <>
                     <button
                       onClick={() => {

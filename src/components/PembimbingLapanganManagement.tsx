@@ -19,7 +19,6 @@ import {
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
-  ShieldCheck,
   GraduationCap
 } from 'lucide-react';
 
@@ -123,6 +122,9 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
     if (onUpdatePembimbingLapangan) {
       onUpdatePembimbingLapangan(updated);
     }
+    if (detailItem && detailItem.id === updated.id) {
+      setDetailItem(updated);
+    }
     setEditingItem(null);
     showFlash('success', `Data Pembimbing Lapangan "${updated.nama}" berhasil diperbarui!`);
   };
@@ -141,6 +143,11 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
     if (!Array.isArray(pembimbingLapanganList)) return [];
     return pembimbingLapanganList.filter((item): item is PembimbingLapanganStaff => Boolean(item && typeof item === 'object'));
   }, [pembimbingLapanganList]);
+
+  const activeDetailItem = useMemo(
+    () => (detailItem ? safePembimbingList.find((p) => p.id === detailItem.id) ?? detailItem : null),
+    [detailItem, safePembimbingList]
+  );
 
   const safeKlkList = useMemo(() => {
     if (!Array.isArray(klkList)) return [];
@@ -317,16 +324,6 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
           <div className="text-slate-500 text-[11px] font-medium">Status Akun Aktif</div>
           <div className="text-xl font-bold text-emerald-700 mt-0.5">{stats.aktif} Personel</div>
           <div className="text-[10px] text-slate-400 mt-0.5">Siap Menilai & Verifikasi Presensi</div>
-        </div>
-      </div>
-
-      {/* Info Integration Note */}
-      <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-center justify-between gap-3 text-xs text-blue-900">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
-          <span>
-            <strong>Terintegrasi Otomatis dengan Menu User:</strong> Setiap pembuatan akun baru dengan Peran <strong>User Eksternal</strong> atau Jabatan <strong>Pembimbing Lapangan</strong> di menu <em>Config &rarr; User</em> akan otomatis tercatat dan disinkronkan ke halaman ini.
-          </span>
         </div>
       </div>
 
@@ -583,19 +580,19 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
       </div>
 
       {/* Modal Detail View */}
-      {detailItem && (
+      {activeDetailItem && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl max-w-lg w-full p-6 border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <div className="w-9 h-9 rounded-full bg-blue-100 text-blue-900 flex items-center justify-center font-bold text-sm border border-blue-200">
-                  {((detailItem.nama || 'PL').trim() || 'PL').slice(0, 2).toUpperCase()}
+                  {((activeDetailItem.nama || 'PL').trim() || 'PL').slice(0, 2).toUpperCase()}
                 </div>
                 <div>
                   <h3 className="font-bold text-base text-slate-900">
-                    {detailItem.nama || 'Pembimbing Lapangan'}{detailItem.gelar ? `, ${detailItem.gelar}` : ''}
+                    {activeDetailItem.nama || 'Pembimbing Lapangan'}{activeDetailItem.gelar ? `, ${activeDetailItem.gelar}` : ''}
                   </h3>
-                  <p className="text-xs text-slate-500 font-mono">{detailItem.idMitra || 'IDP-8829101'}</p>
+                  <p className="text-xs text-slate-500 font-mono">{activeDetailItem.idMitra || 'IDP-8829101'}</p>
                 </div>
               </div>
               <button onClick={() => setDetailItem(null)} className="text-slate-400 hover:text-slate-600 p-1">
@@ -607,39 +604,60 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
               <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                 <div className="flex justify-between border-b border-slate-200 pb-1.5">
                   <span className="text-slate-500">Jabatan Fungsional:</span>
-                  <strong className="text-slate-900 font-bold">{detailItem.jabatan || 'Pembimbing Lapangan'}</strong>
+                  <strong className="text-slate-900 font-bold">{activeDetailItem.jabatan || '-'}</strong>
                 </div>
                 <div className="flex justify-between border-b border-slate-200 pb-1.5">
                   <span className="text-slate-500">Instansi / Perusahaan Tempat KLK:</span>
-                  <strong className="text-amber-800 font-bold">{detailItem.namaMitra}</strong>
+                  <strong className="text-amber-800 font-bold">{activeDetailItem.namaMitra || '-'}</strong>
                 </div>
                 <div className="flex justify-between border-b border-slate-200 pb-1.5">
                   <span className="text-slate-500">Email Resmi:</span>
-                  <span className="font-mono text-slate-900">{detailItem.email}</span>
+                  <span className="font-mono text-slate-900">{activeDetailItem.email || '-'}</span>
                 </div>
                 <div className="flex justify-between border-b border-slate-200 pb-1.5">
                   <span className="text-slate-500">No. WhatsApp / HP:</span>
-                  <span className="font-mono text-slate-900">{detailItem.telepon || '-'}</span>
+                  <span className="font-mono text-slate-900">{activeDetailItem.telepon || '-'}</span>
                 </div>
                 <div className="flex justify-between">
                   <span className="text-slate-500">Status Akun:</span>
-                  <span className="font-bold text-emerald-700">{detailItem.status}</span>
+                  <span
+                    className={`font-bold ${
+                      activeDetailItem.status === 'Aktif'
+                        ? 'text-emerald-700'
+                        : activeDetailItem.status === 'Cuti'
+                        ? 'text-amber-700'
+                        : 'text-rose-700'
+                    }`}
+                  >
+                    {activeDetailItem.status}
+                  </span>
                 </div>
               </div>
 
-              {detailItem.alamatInstansi && (
-                <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-slate-800">
-                  <div className="font-bold text-amber-950 mb-1 flex items-center gap-1.5">
-                    <Building2 className="w-3.5 h-3.5 text-amber-700" />
-                    <span>Alamat Instansi / Lokasi KLK:</span>
-                  </div>
-                  <p className="text-slate-700 leading-relaxed">{detailItem.alamatInstansi}</p>
+              <div className="p-3 bg-amber-50/60 border border-amber-200 rounded-xl text-slate-800">
+                <div className="font-bold text-amber-950 mb-1 flex items-center gap-1.5">
+                  <Building2 className="w-3.5 h-3.5 text-amber-700" />
+                  <span>Alamat Instansi / Lokasi KLK:</span>
                 </div>
-              )}
+                <p className="text-slate-700 leading-relaxed">{activeDetailItem.alamatInstansi || '-'}</p>
+              </div>
             </div>
 
-            <div className="flex justify-end pt-3 border-t border-slate-100">
+            <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
               <button
+                type="button"
+                onClick={() => {
+                  const target = activeDetailItem;
+                  setDetailItem(null);
+                  handleOpenEdit(target);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold cursor-pointer"
+              >
+                <Edit2 className="w-3.5 h-3.5" />
+                <span>Edit Data</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setDetailItem(null)}
                 className="px-4 py-2 bg-[#002B49] text-white rounded-lg text-xs font-bold hover:bg-[#003865] cursor-pointer"
               >
@@ -747,13 +765,25 @@ export const PembimbingLapanganManagement: React.FC<PembimbingLapanganManagement
                   <label className="block text-xs font-semibold text-slate-700 mb-1">Status *</label>
                   <select
                     value={editFormData.status}
-                    onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value as 'Aktif' | 'Nonaktif' })}
+                    onChange={(e) => setEditFormData({ ...editFormData, status: e.target.value as PembimbingLapanganStaff['status'] })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-semibold focus:ring-2 focus:ring-[#002B49] focus:outline-none"
                   >
                     <option value="Aktif">Aktif</option>
+                    <option value="Cuti">Cuti</option>
                     <option value="Nonaktif">Nonaktif</option>
                   </select>
                 </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Alamat Instansi / Lokasi KLK</label>
+                <textarea
+                  rows={2}
+                  value={editFormData.alamatInstansi}
+                  onChange={(e) => setEditFormData({ ...editFormData, alamatInstansi: e.target.value })}
+                  placeholder="Contoh: Jl. Industri Kimia No. 12, Surabaya"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                />
               </div>
 
               <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">

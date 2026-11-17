@@ -72,13 +72,20 @@ export const TesisView: React.FC<TesisViewProps> = ({
   student,
   dosenList = []
 }) => {
+  const isAdminOrSuperAdmin = currentRole === 'admin' || currentRole === 'super_admin';
   // Persistence via localStorage
   const [tesisList, setTesisList] = useState<TesisMahasiswaItem[]>(() => {
+    const emptiedFlag = localStorage.getItem('sikma_tesis_emptied_v1');
+    if (!emptiedFlag) {
+      localStorage.removeItem('sikma_tesis_data');
+      localStorage.setItem('sikma_tesis_emptied_v1', 'true');
+      return [];
+    }
     const saved = localStorage.getItem('sikma_tesis_data');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed.map((item: TesisMahasiswaItem) => {
             let tahapan = item.tahapan;
             if (tahapan === 'Usulan Tesis') tahapan = 'Pengajuan Judul';
@@ -824,13 +831,18 @@ export const TesisView: React.FC<TesisViewProps> = ({
               <span>Data Induk Mahasiswa S2</span>
             </button>
 
-            <button
-              onClick={() => setIsAddModalOpen(true)}
-              className="px-4 py-2.5 bg-yellow-400 hover:bg-yellow-500 active:bg-yellow-600 text-slate-900 rounded-xl font-bold text-xs shadow-md flex items-center space-x-2 transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4 font-bold text-slate-900" />
-              <span>Daftar Tesis</span>
-            </button>
+            {isAdminOrSuperAdmin && (
+              <button
+                onClick={() => {
+                  if (!isAdminOrSuperAdmin) return;
+                  setIsAddModalOpen(true);
+                }}
+                className="px-4 py-2.5 bg-yellow-400 hover:bg-yellow-500 active:bg-yellow-600 text-slate-900 rounded-xl font-bold text-xs shadow-md flex items-center space-x-2 transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4 font-bold text-slate-900" />
+                <span>Daftar Tesis</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

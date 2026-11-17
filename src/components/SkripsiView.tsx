@@ -206,13 +206,21 @@ export const SkripsiView: React.FC<SkripsiViewProps> = ({
   student,
   dosenList = []
 }) => {
+  const isAdminOrSuperAdmin = currentRole === 'admin' || currentRole === 'super_admin';
+
   // Persistence via localStorage
   const [skripsiList, setSkripsiList] = useState<SkripsiMahasiswaItem[]>(() => {
+    const emptiedFlag = localStorage.getItem('sikma_skripsi_emptied_v1');
+    if (!emptiedFlag) {
+      localStorage.removeItem('sikma_skripsi_data');
+      localStorage.setItem('sikma_skripsi_emptied_v1', 'true');
+      return [];
+    }
     const saved = localStorage.getItem('sikma_skripsi_data');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
+        if (Array.isArray(parsed)) {
           return parsed;
         }
       } catch (e) {
@@ -1433,6 +1441,7 @@ export const SkripsiView: React.FC<SkripsiViewProps> = ({
   }, [filteredList, currentPage]);
 
   const handleOpenAdd = () => {
+    if (!isAdminOrSuperAdmin) return;
     setFormNim(student ? student.nim : '');
     setFormNama(student ? student.nama : '');
     setFormLab(student?.labPenelitian || 'Laboratorium Kimia Organik & Bahan Alam');
@@ -1641,15 +1650,17 @@ export const SkripsiView: React.FC<SkripsiViewProps> = ({
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleOpenAdd}
-              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition-colors"
-            >
-              <Plus className="w-4 h-4" />
-              <span>Tambah Usulan Skripsi</span>
-            </button>
-          </div>
+          {isAdminOrSuperAdmin && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleOpenAdd}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-sm flex items-center gap-1.5 transition-colors cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Tambah Usulan Skripsi</span>
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Quick Stats Summary */}

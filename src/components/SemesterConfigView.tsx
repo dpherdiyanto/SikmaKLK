@@ -18,7 +18,7 @@ import {
   RotateCcw,
   ShieldAlert
 } from 'lucide-react';
-import { UserRole, SemesterItem } from '../types/sikma';
+import { UserRole, SemesterItem, isMahasiswaRole } from '../types/sikma';
 import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 
 interface SemesterConfigViewProps {
@@ -30,7 +30,7 @@ export const SemesterConfigView: React.FC<SemesterConfigViewProps> = ({
   currentRole,
   onSelectActiveSemester
 }) => {
-  if (currentRole === 'mahasiswa') {
+  if (isMahasiswaRole(currentRole)) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center max-w-xl mx-auto shadow-sm my-8">
         <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">

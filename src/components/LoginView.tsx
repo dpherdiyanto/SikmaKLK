@@ -1,26 +1,18 @@
 import React, { useState } from 'react';
-import { UserRole, AuthUser } from '../types/sikma';
+import { UserRole, AuthUser, isMahasiswaRole, normalizeMahasiswaRole } from '../types/sikma';
 import { PREDEFINED_ACCOUNTS } from '../data/authUsers';
-import { UserAccountItem, INITIAL_USER_ACCOUNTS } from '../data/userList';
+import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
 import { UbLogo } from './UbLogo';
+import { verifyPassword, isHashedPassword } from '../utils/passwordPolicy';
 import {
   FlaskConical,
-  ShieldCheck,
-  Building2,
-  GraduationCap,
   User,
   Lock,
   Eye,
   EyeOff,
   LogIn,
-  CheckCircle2,
-  Sparkles,
-  Info,
   Calendar,
-  AlertCircle,
-  ExternalLink,
-  UserPlus,
-  Briefcase
+  AlertCircle
 } from 'lucide-react';
 
 interface LoginViewProps {
@@ -28,11 +20,9 @@ interface LoginViewProps {
 }
 
 export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
-  const [selectedRole, setSelectedRole] = useState<UserRole>('mahasiswa');
-  const [username, setUsername] = useState<string>(PREDEFINED_ACCOUNTS.mahasiswa.username);
-  const [password, setPassword] = useState<string>(PREDEFINED_ACCOUNTS.mahasiswa.passwordHint);
+  const [username, setUsername] = useState<string>('');
+  const [password, setPassword] = useState<string>('');
   const [showPassword, setShowPassword] = useState<boolean>(false);
-  const [rememberMe, setRememberMe] = useState<boolean>(true);
   const [errorMessage, setErrorMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
@@ -43,28 +33,49 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed;
+          let changed = false;
+          const normalized = parsed.map((acc) => {
+            const raw = String(acc.role || '').trim().toLowerCase();
+            return {
+              ...acc,
+              role:
+                raw === 'super_admin' || raw === 'super admin' || raw === 'superadmin'
+                  ? ('super_admin' as UserRole)
+                  : normalizeMahasiswaRole(acc.role, acc.unit || acc.jabatan)
+            };
+          });
+          if (!normalized.some((u) => u.role === 'super_admin')) {
+            const seedSuperAdmin = INITIAL_USER_ACCOUNTS.find((u) => u.role === 'super_admin') || INITIAL_USER_ACCOUNTS[0];
+            normalized.unshift(seedSuperAdmin);
+            changed = true;
+          }
+          if (!localStorage.getItem('sikma_mhs_s1_s2_s3_migrated_v1')) {
+            for (const extraRole of ['mahasiswa_s2', 'mahasiswa_s3'] as const) {
+              if (!normalized.some((u) => u.role === extraRole)) {
+                const seedUser = INITIAL_USER_ACCOUNTS.find((u) => u.role === extraRole);
+                if (seedUser) normalized.push(seedUser);
+              }
+            }
+            localStorage.setItem('sikma_mhs_s1_s2_s3_migrated_v1', 'true');
+            changed = true;
+          }
+          let finalAccounts = normalized;
+          if (!localStorage.getItem(NIM_NIP_MIGRATION_FLAG)) {
+            const migRes = migrateUsernamesToNimNip(normalized);
+            finalAccounts = migRes.migrated;
+            localStorage.setItem(NIM_NIP_MIGRATION_FLAG, 'true');
+            if (migRes.changed) changed = true;
+          }
+          if (changed) {
+            localStorage.setItem('sikma_user_accounts', JSON.stringify(finalAccounts));
+          }
+          return finalAccounts;
         }
       }
     } catch {
       // fallback
     }
     return INITIAL_USER_ACCOUNTS;
-  };
-
-  // Switch preset when role changes
-  const handleSelectRole = (role: UserRole) => {
-    setSelectedRole(role);
-    setErrorMessage('');
-    const accounts = getUserAccounts();
-    const matched = accounts.find((a) => a.role === role && a.status === 'Aktif') || accounts.find((a) => a.role === role);
-    if (matched) {
-      setUsername(matched.username);
-      setPassword(matched.password || PREDEFINED_ACCOUNTS[role]?.passwordHint || '123456');
-    } else {
-      setUsername(PREDEFINED_ACCOUNTS[role].username);
-      setPassword(PREDEFINED_ACCOUNTS[role].passwordHint);
-    }
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -75,165 +86,136 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
     const inputPass = password.trim();
 
     if (!inputUser || !inputPass) {
-      setErrorMessage('Silakan masukkan Username / NIM / NIP dan Kata Sandi.');
+      setErrorMessage('Silakan masukkan Username dan Kata Sandi.');
       return;
     }
 
     setIsLoading(true);
 
-    setTimeout(() => {
-      setIsLoading(false);
-      const accounts = getUserAccounts();
+    setTimeout(async () => {
+      try {
+        const accounts = getUserAccounts();
 
-      // Find user matching username, identifier (NIM/NIP), or email
-      const matched = accounts.find((acc) => {
-        if (!acc) return false;
-        const u = (acc.username || '').toLowerCase();
-        const inputLower = (inputUser || '').toLowerCase();
-        const idLower = (acc.identifier || '').toLowerCase();
-        const emailLower = (acc.email || '').toLowerCase();
+        // Find user matching username, identifier (NIM/NIP), or email
+        const matched = accounts.find((acc) => {
+          if (!acc) return false;
+          const u = (acc.username || '').toLowerCase();
+          const inputLower = (inputUser || '').toLowerCase();
+          const idLower = (acc.identifier || '').toLowerCase();
+          const emailLower = (acc.email || '').toLowerCase();
 
-        // Also clean punctuation for NIM/NIP matching
-        const cleanId = idLower.replace(/[^a-z0-9]/g, '');
-        const cleanInput = inputLower.replace(/[^a-z0-9]/g, '');
+          // Also clean punctuation for NIM/NIP matching
+          const cleanId = idLower.replace(/[^a-z0-9]/g, '');
+          const cleanInput = inputLower.replace(/[^a-z0-9]/g, '');
 
-        return (
-          (u && u === inputLower) ||
-          (idLower && idLower === inputLower) ||
-          (cleanInput.length >= 4 && cleanId.includes(cleanInput)) ||
-          (emailLower && emailLower === inputLower)
-        );
-      });
-
-      if (matched) {
-        // Status validation
-        if (matched.status !== 'Aktif') {
-          setErrorMessage(`Akun "${matched.nama}" sedang berstatus ${matched.status}. Silakan hubungi Administrator SIKMA.`);
-          return;
-        }
-
-        // Password validation
-        const expectedPass = matched.password || PREDEFINED_ACCOUNTS[matched.role]?.passwordHint || '123456';
-        const fallbackPreset = PREDEFINED_ACCOUNTS[matched.role]?.passwordHint;
-        const isPasswordMatch =
-          inputPass === expectedPass ||
-          (fallbackPreset && inputPass === fallbackPreset) ||
-          (matched.role === 'super_admin' && inputPass === 'super123') ||
-          (matched.role === 'admin' && inputPass === 'admin123') ||
-          (matched.role === 'dosen' && inputPass === 'dosen123') ||
-          (matched.role === 'mahasiswa' && inputPass === 'mhs123');
-
-        if (!isPasswordMatch) {
-          setErrorMessage('Kata sandi yang Anda masukkan salah. Silakan periksa kembali kata sandi Anda.');
-          return;
-        }
-
-        // Update stored password to new compliant password if using updated preset
-        if (fallbackPreset && inputPass === fallbackPreset && matched.password !== fallbackPreset) {
-          matched.password = fallbackPreset;
-        }
-
-        // Update login timestamp in stored accounts
-        const nowStr = 'Hari ini, ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
-        const updatedAccounts = accounts.map((item) =>
-          item.id === matched.id ? { ...item, terakhirLogin: nowStr } : item
-        );
-        localStorage.setItem('sikma_user_accounts', JSON.stringify(updatedAccounts));
-
-        // Create AuthUser
-        const authUser: AuthUser = {
-          id: matched.id,
-          username: matched.username,
-          nama: matched.nama,
-          role: matched.role,
-          identifier: matched.identifier,
-          email: matched.email,
-          avatarText: matched.avatarText,
-          unit: matched.unit,
-          jabatan: matched.jabatan,
-          lastLogin: 'Baru saja'
-        };
-
-        onLoginSuccess(authUser);
-        return;
-      }
-
-      // Check fallback in PREDEFINED_ACCOUNTS
-      const inputLower = (inputUser || '').toLowerCase();
-      const predefinedMatch = Object.values(PREDEFINED_ACCOUNTS).find(
-        (p) =>
-          (p.username && p.username.toLowerCase() === inputLower) ||
-          (p.email && p.email.toLowerCase() === inputLower) ||
-          (p.identifier && p.identifier.toLowerCase().includes(inputLower))
-      );
-
-      if (predefinedMatch) {
-        if (inputPass !== predefinedMatch.passwordHint) {
-          setErrorMessage('Kata sandi yang Anda masukkan salah. Silakan periksa kembali.');
-          return;
-        }
-
-        onLoginSuccess({
-          ...predefinedMatch,
-          lastLogin: 'Baru saja'
+          return (
+            (u && u === inputLower) ||
+            (idLower && idLower === inputLower) ||
+            (cleanInput.length >= 4 && cleanId.includes(cleanInput)) ||
+            (emailLower && emailLower === inputLower)
+          );
         });
-        return;
-      }
 
-      // User not found
-      setErrorMessage(`Akun dengan ID/Username "${username}" tidak ditemukan. Pastikan akun telah didaftarkan pada Konfigurasi Pengguna SIKMA.`);
+        if (matched) {
+          // Status validation
+          if (matched.status !== 'Aktif') {
+            setErrorMessage(`Akun "${matched.nama}" sedang berstatus ${matched.status}. Silakan hubungi Administrator SIKMA.`);
+            return;
+          }
+
+          // Password validation (supports salted SHA-256 hash & plaintext accounts)
+          const storedPass = matched.password;
+          const expectedPass = storedPass || PREDEFINED_ACCOUNTS[matched.role]?.passwordHint || '123456';
+          const fallbackPreset = PREDEFINED_ACCOUNTS[matched.role]?.passwordHint;
+          const isStoredHashed = isHashedPassword(storedPass);
+          const isHashVerified = storedPass ? await verifyPassword(inputPass, storedPass) : false;
+
+          const isPasswordMatch =
+            isHashVerified ||
+            (!isStoredHashed && inputPass === expectedPass) ||
+            (!isStoredHashed && fallbackPreset && inputPass === fallbackPreset) ||
+            (!isStoredHashed && matched.role === 'super_admin' && inputPass === 'super123') ||
+            (!isStoredHashed && matched.role === 'admin' && inputPass === 'admin123') ||
+            (!isStoredHashed && matched.role === 'dosen' && inputPass === 'dosen123') ||
+            (!isStoredHashed && isMahasiswaRole(matched.role) && inputPass === 'mhs123');
+
+          if (!isPasswordMatch) {
+            setErrorMessage('Kata sandi yang Anda masukkan salah. Silakan periksa kembali kata sandi Anda.');
+            return;
+          }
+
+          // Update stored password to new compliant password if using updated non-hashed preset
+          if (!isStoredHashed && fallbackPreset && inputPass === fallbackPreset && matched.password !== fallbackPreset) {
+            matched.password = fallbackPreset;
+          }
+
+          // Detect first login or pending mandatory password change
+          const isFirstLogin = !matched.terakhirLogin || matched.terakhirLogin === 'Belum pernah login';
+          const mustChangePassword =
+            matched.mustChangePassword === true ||
+            (isFirstLogin && !matched.passwordChangedAt);
+
+          // Update login timestamp & flag in stored accounts
+          const nowStr = 'Hari ini, ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
+          const updatedAccounts = accounts.map((item) =>
+            item.id === matched.id
+              ? { ...item, terakhirLogin: nowStr, mustChangePassword }
+              : item
+          );
+          localStorage.setItem('sikma_user_accounts', JSON.stringify(updatedAccounts));
+
+          // Create AuthUser
+          const authUser: AuthUser = {
+            id: matched.id,
+            username: matched.username,
+            nama: matched.nama,
+            role: matched.role,
+            identifier: matched.identifier,
+            email: matched.email,
+            avatarText: matched.avatarText,
+            unit: matched.unit,
+            jabatan: matched.jabatan,
+            lastLogin: isFirstLogin ? 'Login Pertama Kali' : 'Baru saja',
+            mustChangePassword,
+            isFirstLogin,
+            passwordChangedAt: matched.passwordChangedAt
+          };
+
+          onLoginSuccess(authUser);
+          return;
+        }
+
+        // Check fallback in PREDEFINED_ACCOUNTS
+        const inputLower = (inputUser || '').toLowerCase();
+        const predefinedMatch = Object.values(PREDEFINED_ACCOUNTS).find(
+          (p) =>
+            (p.username && p.username.toLowerCase() === inputLower) ||
+            (inputLower === 'mahasiswa' && p.role === 'mahasiswa_s1') ||
+            (p.email && p.email.toLowerCase() === inputLower) ||
+            (p.identifier && p.identifier.toLowerCase().includes(inputLower))
+        );
+
+        if (predefinedMatch) {
+          if (inputPass !== predefinedMatch.passwordHint) {
+            setErrorMessage('Kata sandi yang Anda masukkan salah. Silakan periksa kembali.');
+            return;
+          }
+
+          onLoginSuccess({
+            ...predefinedMatch,
+            lastLogin: 'Baru saja'
+          });
+          return;
+        }
+
+        // User not found
+        setErrorMessage(`Akun dengan ID/Username "${username}" tidak ditemukan. Pastikan akun telah didaftarkan pada Konfigurasi Pengguna SIKMA.`);
+      } finally {
+        setIsLoading(false);
+      }
     }, 350);
   };
 
-  const roleConfigs = [
-    {
-      role: 'super_admin' as UserRole,
-      title: 'Super Admin',
-      subtitle: 'Super Admin',
-      icon: ShieldCheck,
-      color: 'from-purple-600 to-indigo-700',
-      badgeBg: 'bg-purple-100 text-purple-800 border-purple-200',
-      activeBorder: 'border-purple-600 bg-purple-50/50'
-    },
-    {
-      role: 'admin' as UserRole,
-      title: 'Admin Jurusan',
-      subtitle: 'Akademik & Laboran',
-      icon: Building2,
-      color: 'from-amber-600 to-orange-700',
-      badgeBg: 'bg-amber-100 text-amber-800 border-amber-200',
-      activeBorder: 'border-amber-600 bg-amber-50/50'
-    },
-    {
-      role: 'dosen' as UserRole,
-      title: 'Dosen Pembimbing',
-      subtitle: 'PA & Penguji Skripsi',
-      icon: GraduationCap,
-      color: 'from-blue-600 to-sky-700',
-      badgeBg: 'bg-blue-100 text-blue-800 border-blue-200',
-      activeBorder: 'border-blue-600 bg-blue-50/50'
-    },
-    {
-      role: 'eksternal' as UserRole,
-      title: 'User Eksternal',
-      subtitle: 'Pembimbing Lapangan KLK',
-      icon: Briefcase,
-      color: 'from-amber-600 to-amber-800',
-      badgeBg: 'bg-amber-100 text-amber-900 border-amber-300',
-      activeBorder: 'border-amber-600 bg-amber-50/50'
-    },
-    {
-      role: 'mahasiswa' as UserRole,
-      title: 'Mahasiswa Kimia',
-      subtitle: 'S1 Kimia FSTeM',
-      icon: User,
-      color: 'from-emerald-600 to-teal-700',
-      badgeBg: 'bg-emerald-100 text-emerald-800 border-emerald-200',
-      activeBorder: 'border-emerald-600 bg-emerald-50/50'
-    }
-  ];
-
-  const currentAccount = PREDEFINED_ACCOUNTS[selectedRole];
 
   return (
     <div className="min-h-screen bg-slate-100 flex flex-col justify-between">
@@ -274,64 +256,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
       {/* Main Login Body */}
       <main className="flex-1 flex items-center justify-center p-4 sm:p-6 lg:p-8">
-        <div className="w-full max-w-5xl grid grid-cols-1 lg:grid-cols-12 gap-8 items-center">
-          {/* Left Column: Brand & Role Selection Info */}
-          <div className="lg:col-span-5 space-y-6">
-            <div className="space-y-3">
-              <h2 className="text-2xl sm:text-3xl font-extrabold text-[#002B49] tracking-tight leading-tight">
-                Selamat Datang di Portal SIKMA KLK Kimia
-              </h2>
-            </div>
-
-            {/* Role Switcher Cards */}
-            <div className="space-y-2.5">
-              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
-                Pilih Peran Akun (Role):
-              </label>
-              <div className="grid grid-cols-2 gap-2.5">
-                {roleConfigs.map((cfg) => {
-                  const Icon = cfg.icon;
-                  const isSelected = selectedRole === cfg.role;
-                  return (
-                    <button
-                      key={cfg.role}
-                      type="button"
-                      id={`select-role-${cfg.role}`}
-                      onClick={() => handleSelectRole(cfg.role)}
-                      className={`p-3 rounded-xl border text-left transition-all relative flex flex-col justify-between ${
-                        isSelected
-                          ? `${cfg.activeBorder} shadow-md ring-2 ring-offset-1 ring-[#002B49]`
-                          : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div
-                          className={`w-8 h-8 rounded-lg flex items-center justify-center text-white bg-gradient-to-br ${cfg.color} shadow-sm`}
-                        >
-                          <Icon className="w-4 h-4" />
-                        </div>
-                        {isSelected && (
-                          <CheckCircle2 className="w-4 h-4 text-[#002B49]" />
-                        )}
-                      </div>
-                      <div>
-                        <div className="text-xs font-bold text-slate-900 leading-tight">
-                          {cfg.title}
-                        </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          {cfg.subtitle}
-                        </div>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Interactive Login Box */}
-          <div className="lg:col-span-7">
-            <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
+        <div className="w-full max-w-md mx-auto">
+          {/* Interactive Login Box */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xl overflow-hidden">
               {/* Header Box with Role Gradient */}
               <div className="bg-[#002B49] text-white p-6 relative overflow-hidden">
                 <div className="absolute right-0 bottom-0 opacity-10 translate-x-4 translate-y-4">
@@ -339,17 +266,9 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                 </div>
                 <div className="relative z-10 flex items-center justify-between">
                   <div>
-                    <div className="flex items-center space-x-2">
-                      <span className="text-xs font-semibold px-2.5 py-0.5 rounded-full bg-[#D4AF37] text-[#002B49]">
-                        Autentikasi {currentAccount.badgeLabel}
-                      </span>
-                    </div>
-                    <h3 className="text-xl font-bold text-white mt-1.5">
+                    <h3 className="text-xl font-bold text-white">
                       Masuk ke Akun Anda
                     </h3>
-                    <p className="text-xs text-slate-300 mt-0.5">
-                      Gunakan kredensial akun SSO Universitas Brawijaya
-                    </p>
                   </div>
                 </div>
               </div>
@@ -363,18 +282,14 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                   </div>
                 )}
 
-                <form onSubmit={handleSubmit} className="space-y-4">
-                  {/* Username / NIM / NIP Input */}
+                <form onSubmit={handleSubmit} autoComplete="off" className="space-y-4">
+                  {/* Username Input */}
                   <div>
                     <label
                       htmlFor="login-username-input"
                       className="block text-xs font-semibold text-slate-700 mb-1"
                     >
-                      {selectedRole === 'mahasiswa'
-                        ? 'NIM / Akun Mahasiswa (@student.ub.ac.id)'
-                        : selectedRole === 'dosen'
-                        ? 'NIP / NIDN / Email UB (@ub.ac.id)'
-                        : 'Username / ID Petugas Akademik'}
+                      Username
                     </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
@@ -383,9 +298,11 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                       <input
                         type="text"
                         id="login-username-input"
+                        name="sikma_username"
+                        autoComplete="off"
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
-                        placeholder="Masukkan ID Pengguna..."
+                        placeholder="Masukkan username..."
                         required
                         className="w-full pl-9 pr-3 py-2.5 text-xs bg-white border border-slate-300 rounded-lg text-slate-900 focus:ring-2 focus:ring-[#002B49] focus:border-[#002B49] transition-all"
                       />
@@ -394,17 +311,12 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
                   {/* Password Input */}
                   <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label
-                        htmlFor="login-password-input"
-                        className="block text-xs font-semibold text-slate-700"
-                      >
-                        Kata Sandi (Password)
-                      </label>
-                      <span className="text-[11px] text-slate-500 font-mono">
-                        Demo: <span className="font-semibold text-slate-700">{password || currentAccount.passwordHint}</span>
-                      </span>
-                    </div>
+                    <label
+                      htmlFor="login-password-input"
+                      className="block text-xs font-semibold text-slate-700 mb-1"
+                    >
+                      Kata Sandi (Password)
+                    </label>
                     <div className="relative">
                       <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400">
                         <Lock className="w-4 h-4" />
@@ -412,6 +324,8 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                       <input
                         type={showPassword ? 'text' : 'password'}
                         id="login-password-input"
+                        name="sikma_password"
+                        autoComplete="new-password"
                         value={password}
                         onChange={(e) => setPassword(e.target.value)}
                         placeholder="Masukkan kata sandi..."
@@ -432,31 +346,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                     </div>
                   </div>
 
-                  {/* Remember Me & Help */}
-                  <div className="flex items-center justify-between text-xs">
-                    <label className="flex items-center space-x-2 text-slate-600 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={rememberMe}
-                        onChange={(e) => setRememberMe(e.target.checked)}
-                        className="rounded border-slate-300 text-[#002B49] focus:ring-[#002B49]"
-                      />
-                      <span>Ingat sesi login saya</span>
-                    </label>
-
-                    <a
-                      href="#bantuan"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        alert(
-                          'Untuk bantuan login akun SIKMA Kimia UB, silakan hubungi Biro Akademik FSTeM UB di Gedung Kimia Lantai 1 atau email: akademik.kimia@ub.ac.id'
-                        );
-                      }}
-                      className="text-[#002B49] hover:underline font-medium"
-                    >
-                      Bantuan Login?
-                    </a>
-                  </div>
 
                   {/* Submit Button */}
                   <button
@@ -470,7 +359,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
                     ) : (
                       <>
                         <LogIn className="w-4 h-4 text-[#D4AF37]" />
-                        <span>Masuk Sebagai {currentAccount.badgeLabel}</span>
+                        <span>Login</span>
                       </>
                     )}
                   </button>
@@ -478,7 +367,6 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
               </div>
             </div>
           </div>
-        </div>
       </main>
 
       {/* Footer */}

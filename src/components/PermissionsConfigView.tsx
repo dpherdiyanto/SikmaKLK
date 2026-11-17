@@ -31,8 +31,16 @@ import {
   Trash2,
   Edit2
 } from 'lucide-react';
-import { UserRole } from '../types/sikma';
-import { UserAccountItem, INITIAL_USER_ACCOUNTS } from '../data/userList';
+import { UserRole, getUserRoleLabel, normalizeMahasiswaRole } from '../types/sikma';
+import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
+
+export type RbacRoleKey =
+  | 'super_admin'
+  | 'admin'
+  | 'dosen'
+  | 'mahasiswa_s1'
+  | 'mahasiswa_s2'
+  | 'mahasiswa_s3';
 
 export interface PermissionItem {
   id: string;
@@ -45,7 +53,9 @@ export interface PermissionItem {
   super_admin: boolean;
   admin: boolean;
   dosen: boolean;
-  mahasiswa: boolean;
+  mahasiswa_s1: boolean;
+  mahasiswa_s2: boolean;
+  mahasiswa_s3: boolean;
 }
 
 export const INITIAL_PERMISSIONS: PermissionItem[] = [
@@ -61,7 +71,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-2',
@@ -74,7 +86,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-3',
@@ -87,7 +101,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-4',
@@ -100,7 +116,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-5',
@@ -113,7 +131,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-6',
@@ -126,7 +146,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: false,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-7',
@@ -139,7 +161,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
 
   // Modul Skripsi & Tesis
@@ -154,7 +178,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-9',
@@ -167,7 +193,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-10',
@@ -180,7 +208,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-11',
@@ -193,7 +223,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-12',
@@ -206,7 +238,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
 
   // Modul Laboratorium
@@ -221,7 +255,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-14',
@@ -234,7 +270,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-15',
@@ -247,7 +285,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-16',
@@ -260,7 +300,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
 
   // Modul Config
@@ -275,7 +317,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-18',
@@ -288,7 +332,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-19',
@@ -301,7 +347,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-20',
@@ -314,7 +362,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-21',
@@ -327,7 +377,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-22',
@@ -340,7 +392,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-23',
@@ -353,7 +407,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
 
   // Modul Layanan & Info
@@ -368,7 +424,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: true
+    mahasiswa_s1: true,
+    mahasiswa_s2: true,
+    mahasiswa_s3: true
   },
   {
     id: 'perm-25',
@@ -381,7 +439,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-26',
@@ -394,7 +454,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   },
   {
     id: 'perm-27',
@@ -407,7 +469,9 @@ export const INITIAL_PERMISSIONS: PermissionItem[] = [
     super_admin: true,
     admin: true,
     dosen: true,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   }
 ];
 
@@ -464,7 +528,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
         <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
           Menu <strong>Permissions</strong> hanya dapat diakses oleh pengguna dengan peran <strong>Super Admin</strong> dan <strong>Admin Departemen</strong>.
           <br /><br />
-          Peran Anda saat ini (<span className="font-semibold text-rose-700 capitalize">{currentRole === 'dosen' ? 'Dosen' : 'Mahasiswa'}</span>) tidak memiliki izin untuk melihat atau mengonfigurasi wewenang keamanan sistem SIKMA.
+          Peran Anda saat ini (<span className="font-semibold text-rose-700">{getUserRoleLabel(currentRole)}</span>) tidak memiliki izin untuk melihat atau mengonfigurasi wewenang keamanan sistem SIKMA.
         </p>
         {onNavigate && (
           <button
@@ -481,16 +545,58 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   const isSuperAdmin = currentRole === 'super_admin';
   const isAdmin = currentRole === 'admin';
 
-  // State for permissions with localStorage persistence
+  // State for permissions with localStorage persistence + migrasi otomatis role mahasiswa lama
   const [permissions, setPermissions] = useState<PermissionItem[]>(() => {
     const saved = localStorage.getItem('sikma_rbac_permissions');
-    return saved ? JSON.parse(saved) : INITIAL_PERMISSIONS;
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return parsed.map((item: any) => {
+            const legacyMhs = typeof item.mahasiswa === 'boolean' ? item.mahasiswa : false;
+            return {
+              ...item,
+              mahasiswa_s1: typeof item.mahasiswa_s1 === 'boolean' ? item.mahasiswa_s1 : legacyMhs,
+              mahasiswa_s2: typeof item.mahasiswa_s2 === 'boolean' ? item.mahasiswa_s2 : legacyMhs,
+              mahasiswa_s3: typeof item.mahasiswa_s3 === 'boolean' ? item.mahasiswa_s3 : legacyMhs
+            } as PermissionItem;
+          });
+        }
+      } catch {}
+    }
+    return INITIAL_PERMISSIONS;
   });
 
   // State for user accounts to support role assignment/distribution
   const [userAccounts, setUserAccounts] = useState<UserAccountItem[]>(() => {
-    const saved = localStorage.getItem('sikma_users');
-    return saved ? JSON.parse(saved) : INITIAL_USER_ACCOUNTS;
+    const saved = localStorage.getItem('sikma_user_accounts') || localStorage.getItem('sikma_users');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          const normalized = parsed.map((u: any) => {
+            const raw = String(u.role || '').trim().toLowerCase();
+            return {
+              ...u,
+              role:
+                raw === 'super_admin' || raw === 'super admin' || raw === 'superadmin'
+                  ? ('super_admin' as UserRole)
+                  : normalizeMahasiswaRole(u.role, u.unit || u.jabatan)
+            };
+          });
+          if (!normalized.some((u: any) => u.role === 'super_admin')) {
+            const seedSuperAdmin = INITIAL_USER_ACCOUNTS.find((u) => u.role === 'super_admin') || INITIAL_USER_ACCOUNTS[0];
+            normalized.unshift(seedSuperAdmin);
+          }
+          if (!localStorage.getItem(NIM_NIP_MIGRATION_FLAG)) {
+            const migRes = migrateUsernamesToNimNip(normalized);
+            return migRes.migrated;
+          }
+          return normalized;
+        }
+      } catch {}
+    }
+    return INITIAL_USER_ACCOUNTS;
   });
 
   const [auditLogs, setAuditLogs] = useState<AuditLogItem[]>(() => {
@@ -502,7 +608,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedModule, setSelectedModule] = useState<string>('all');
   const [selectedRisk, setSelectedRisk] = useState<string>('all');
-  const [activeRoleView, setActiveRoleView] = useState<'all' | UserRole>('all');
+  const [activeRoleView, setActiveRoleView] = useState<'all' | RbacRoleKey>('all');
   const [activeTabSection, setActiveTabSection] = useState<'matrix' | 'role_assignment'>('matrix');
 
   // Modal State
@@ -515,11 +621,13 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   const [newModule, setNewModule] = useState<'SDM' | 'Skripsi & Tesis' | 'Laboratorium' | 'Config' | 'Layanan & Info'>('SDM');
   const [newDesc, setNewDesc] = useState('');
   const [newRisk, setNewRisk] = useState<'Kritis' | 'Tinggi' | 'Sedang' | 'Rendah'>('Sedang');
-  const [newRoles, setNewRoles] = useState<Record<UserRole, boolean>>({
+  const [newRoles, setNewRoles] = useState<Record<RbacRoleKey, boolean>>({
     super_admin: true,
     admin: true,
     dosen: false,
-    mahasiswa: false
+    mahasiswa_s1: false,
+    mahasiswa_s2: false,
+    mahasiswa_s3: false
   });
 
   // Alert feedback
@@ -538,6 +646,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   const saveUserAccounts = (updated: UserAccountItem[]) => {
     setUserAccounts(updated);
     localStorage.setItem('sikma_users', JSON.stringify(updated));
+    localStorage.setItem('sikma_user_accounts', JSON.stringify(updated));
   };
 
   const addAuditLog = (action: string, detail: string) => {
@@ -560,7 +669,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   };
 
   // Toggle single role permission
-  const handleToggle = (permId: string, role: UserRole) => {
+  const handleToggle = (permId: string, role: RbacRoleKey) => {
     const item = permissions.find((p) => p.id === permId);
     if (!item) return;
 
@@ -664,7 +773,9 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
       super_admin: superAdminGranted,
       admin: newRoles.admin,
       dosen: newRoles.dosen,
-      mahasiswa: newRoles.mahasiswa
+      mahasiswa_s1: newRoles.mahasiswa_s1,
+      mahasiswa_s2: newRoles.mahasiswa_s2,
+      mahasiswa_s3: newRoles.mahasiswa_s3
     };
 
     const updated = [newPerm, ...permissions];
@@ -685,7 +796,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
 
     // Rule: Admin cannot assign or promote accounts to Super Admin or Admin
     if (isAdmin && (newRole === 'super_admin' || newRole === 'admin')) {
-      showAlert('Akses Terbatas: Sebagai Admin, Anda hanya berhak menetapkan role "Dosen" atau "Mahasiswa". Role Super Admin dan Admin hanya dapat ditetapkan oleh Super Admin.', 'error');
+      showAlert('Akses Terbatas: Sebagai Admin, Anda hanya berhak menetapkan role "Dosen", "Mahasiswa S1/S2/S3", atau "User Eksternal". Role Super Admin dan Admin hanya dapat ditetapkan oleh Super Admin.', 'error');
       return;
     }
 
@@ -703,7 +814,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
       `Menetapkan peran ${newRole.toUpperCase()} kepada akun "${targetUser.nama}" (${targetUser.identifier}) oleh ${currentRole.toUpperCase()}`
     );
 
-    showAlert(`Peran akun "${targetUser.nama}" berhasil diperbarui menjadi "${newRole === 'super_admin' ? 'Super Admin' : newRole === 'admin' ? 'Admin Dept' : newRole === 'dosen' ? 'Dosen' : 'Mahasiswa'}".`);
+    showAlert(`Peran akun "${targetUser.nama}" berhasil diperbarui menjadi "${getUserRoleLabel(newRole)}".`);
   };
 
   // Filtered Permissions
@@ -724,7 +835,9 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
   const superAdminCount = permissions.filter((p) => p.super_admin).length;
   const adminCount = permissions.filter((p) => p.admin).length;
   const dosenCount = permissions.filter((p) => p.dosen).length;
-  const mhsCount = permissions.filter((p) => p.mahasiswa).length;
+  const mhsS1Count = permissions.filter((p) => p.mahasiswa_s1).length;
+  const mhsS2Count = permissions.filter((p) => p.mahasiswa_s2).length;
+  const mhsS3Count = permissions.filter((p) => p.mahasiswa_s3).length;
 
   return (
     <div className="space-y-6">
@@ -794,7 +907,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                   </span>
                 ) : (
                   <span>
-                    <strong>Admin Departemen</strong> memiliki hak untuk mengakses dan mengelola permissions secara operasional dan terbatas (menetapkan role Dosen dan Mahasiswa). Hak tingkat Super Admin dan struktur dasar sistem terproteksi.
+                    <strong>Admin Departemen</strong> memiliki hak untuk mengakses dan mengelola permissions secara operasional dan terbatas (menetapkan role Dosen, Mahasiswa S1/S2/S3, dan Eksternal). Hak tingkat Super Admin dan struktur dasar sistem terproteksi.
                   </span>
                 )}
               </p>
@@ -858,21 +971,21 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
               <>
                 <Crown className="w-5 h-5 text-[#D4AF37] flex-shrink-0 mt-0.5" />
                 <div className="text-slate-100 leading-relaxed">
-                  <strong className="text-[#D4AF37]">Mode Kendali Penuh Aktif:</strong> Anda memiliki hak akses tanpa batas. Anda dapat mengubah matriks izin untuk peran Super Admin, Admin Dept, Dosen PA, dan Mahasiswa, serta mengatur/mendistribusikan peran kepada semua pengguna sistem.
+                  <strong className="text-[#D4AF37]">Mode Kendali Penuh Aktif:</strong> Anda memiliki hak akses tanpa batas. Anda dapat mengubah matriks izin untuk peran Super Admin, Admin Dept, Dosen PA, Mahasiswa S1, Mahasiswa S2, dan Mahasiswa S3, serta mengatur/mendistribusikan peran kepada semua pengguna sistem.
                 </div>
               </>
             ) : (
               <>
                 <ShieldAlert className="w-5 h-5 text-amber-300 flex-shrink-0 mt-0.5" />
                 <div className="text-slate-100 leading-relaxed">
-                  <strong className="text-amber-300">Wewenang Operasional Terbatas:</strong> Anda dapat mengelola wewenang untuk peran Dosen dan Mahasiswa, serta menetapkan peran Dosen atau Mahasiswa kepada akun. Kolom izin Super Admin terkunci untuk menjaga keamanan struktur dasar sistem.
+                  <strong className="text-amber-300">Wewenang Operasional Terbatas:</strong> Anda dapat mengelola wewenang untuk peran Dosen serta Mahasiswa S1, S2, dan S3, serta menetapkan peran tersebut kepada akun. Kolom izin Super Admin terkunci untuk menjaga keamanan struktur dasar sistem.
                 </div>
               </>
             )}
           </div>
 
           {/* Quick RBAC Role Cards */}
-          <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3 pt-4 border-t border-white/15">
+          <div className="mt-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 pt-4 border-t border-white/15">
             {/* Super Admin */}
             <div
               onClick={() => setActiveRoleView(activeRoleView === 'super_admin' ? 'all' : 'super_admin')}
@@ -938,11 +1051,11 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
               <div className="text-[11px] text-slate-300 truncate">Dikelola oleh Super Admin & Admin</div>
             </div>
 
-            {/* Mahasiswa */}
+            {/* Mahasiswa S1 */}
             <div
-              onClick={() => setActiveRoleView(activeRoleView === 'mahasiswa' ? 'all' : 'mahasiswa')}
+              onClick={() => setActiveRoleView(activeRoleView === 'mahasiswa_s1' ? 'all' : 'mahasiswa_s1')}
               className={`p-3 rounded-xl border transition-all cursor-pointer ${
-                activeRoleView === 'mahasiswa'
+                activeRoleView === 'mahasiswa_s1'
                   ? 'bg-white/20 border-[#D4AF37] shadow-sm'
                   : 'bg-white/5 border-white/10 hover:bg-white/10'
               }`}
@@ -950,13 +1063,55 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
               <div className="flex items-center justify-between text-xs text-emerald-200 font-semibold mb-1">
                 <span className="flex items-center gap-1.5">
                   <GraduationCap className="w-3.5 h-3.5 text-emerald-300" />
-                  Mahasiswa
+                  Mahasiswa S1
                 </span>
                 <span className="text-[10px] bg-emerald-400/30 px-1.5 py-0.5 rounded font-mono">
-                  {mhsCount}/{totalCount}
+                  {mhsS1Count}/{totalCount}
                 </span>
               </div>
-              <div className="text-[11px] text-slate-300 truncate">Dikelola oleh Super Admin & Admin</div>
+              <div className="text-[11px] text-slate-300 truncate">Sarjana Kimia</div>
+            </div>
+
+            {/* Mahasiswa S2 */}
+            <div
+              onClick={() => setActiveRoleView(activeRoleView === 'mahasiswa_s2' ? 'all' : 'mahasiswa_s2')}
+              className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                activeRoleView === 'mahasiswa_s2'
+                  ? 'bg-white/20 border-[#D4AF37] shadow-sm'
+                  : 'bg-white/5 border-white/10 hover:bg-white/10'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs text-teal-200 font-semibold mb-1">
+                <span className="flex items-center gap-1.5">
+                  <GraduationCap className="w-3.5 h-3.5 text-teal-300" />
+                  Mahasiswa S2
+                </span>
+                <span className="text-[10px] bg-teal-400/30 px-1.5 py-0.5 rounded font-mono">
+                  {mhsS2Count}/{totalCount}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-300 truncate">Magister Kimia</div>
+            </div>
+
+            {/* Mahasiswa S3 */}
+            <div
+              onClick={() => setActiveRoleView(activeRoleView === 'mahasiswa_s3' ? 'all' : 'mahasiswa_s3')}
+              className={`p-3 rounded-xl border transition-all cursor-pointer ${
+                activeRoleView === 'mahasiswa_s3'
+                  ? 'bg-white/20 border-[#D4AF37] shadow-sm'
+                  : 'bg-white/5 border-white/10 hover:bg-white/10'
+              }`}
+            >
+              <div className="flex items-center justify-between text-xs text-sky-200 font-semibold mb-1">
+                <span className="flex items-center gap-1.5">
+                  <GraduationCap className="w-3.5 h-3.5 text-sky-300" />
+                  Mahasiswa S3
+                </span>
+                <span className="text-[10px] bg-sky-400/30 px-1.5 py-0.5 rounded font-mono">
+                  {mhsS3Count}/{totalCount}
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-300 truncate">Doktor Kimia</div>
             </div>
           </div>
         </div>
@@ -1046,7 +1201,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
             </div>
 
             {/* View Mode Role Tabs */}
-            <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-semibold">
+            <div className="flex flex-wrap items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs font-semibold">
               <button
                 onClick={() => setActiveRoleView('all')}
                 className={`px-3 py-1.5 rounded-md transition-all ${
@@ -1088,14 +1243,34 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                 Dosen
               </button>
               <button
-                onClick={() => setActiveRoleView('mahasiswa')}
+                onClick={() => setActiveRoleView('mahasiswa_s1')}
                 className={`px-2.5 py-1.5 rounded-md transition-all ${
-                  activeRoleView === 'mahasiswa'
+                  activeRoleView === 'mahasiswa_s1'
                     ? 'bg-emerald-100 text-emerald-900 shadow-xs font-bold'
                     : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                Mahasiswa
+                Mhs S1
+              </button>
+              <button
+                onClick={() => setActiveRoleView('mahasiswa_s2')}
+                className={`px-2.5 py-1.5 rounded-md transition-all ${
+                  activeRoleView === 'mahasiswa_s2'
+                    ? 'bg-teal-100 text-teal-900 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Mhs S2
+              </button>
+              <button
+                onClick={() => setActiveRoleView('mahasiswa_s3')}
+                className={`px-2.5 py-1.5 rounded-md transition-all ${
+                  activeRoleView === 'mahasiswa_s3'
+                    ? 'bg-sky-100 text-sky-900 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+              >
+                Mhs S3
               </button>
             </div>
           </div>
@@ -1117,7 +1292,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                   </span>
                 ) : (
                   <span className="flex items-center gap-1 text-amber-700 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 font-semibold">
-                    <ShieldCheck className="w-3 h-3" /> Akses Operasional (Dosen & Mahasiswa)
+                    <ShieldCheck className="w-3 h-3" /> Akses Operasional (Dosen &amp; Mahasiswa S1/S2/S3)
                   </span>
                 )}
               </div>
@@ -1133,7 +1308,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                     <th className="px-4 py-3 w-24 text-center">Risiko</th>
 
                     {(activeRoleView === 'all' || activeRoleView === 'super_admin') && (
-                      <th className="px-3 py-3 w-32 text-center bg-purple-50/70 text-purple-900 border-l border-slate-200">
+                      <th className="px-3 py-3 w-28 text-center bg-purple-50/70 text-purple-900 border-l border-slate-200">
                         <div className="flex items-center justify-center gap-1">
                           <Crown className="w-3 h-3 text-[#D4AF37]" />
                           <span>Super Admin</span>
@@ -1141,18 +1316,28 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                       </th>
                     )}
                     {(activeRoleView === 'all' || activeRoleView === 'admin') && (
-                      <th className="px-3 py-3 w-28 text-center bg-amber-50/70 text-amber-900 border-l border-slate-200">
+                      <th className="px-3 py-3 w-24 text-center bg-amber-50/70 text-amber-900 border-l border-slate-200">
                         Admin Dept
                       </th>
                     )}
                     {(activeRoleView === 'all' || activeRoleView === 'dosen') && (
-                      <th className="px-3 py-3 w-28 text-center bg-blue-50/70 text-blue-900 border-l border-slate-200">
+                      <th className="px-3 py-3 w-24 text-center bg-blue-50/70 text-blue-900 border-l border-slate-200">
                         Dosen PA
                       </th>
                     )}
-                    {(activeRoleView === 'all' || activeRoleView === 'mahasiswa') && (
-                      <th className="px-3 py-3 w-28 text-center bg-emerald-50/70 text-emerald-900 border-l border-slate-200">
-                        Mahasiswa
+                    {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s1') && (
+                      <th className="px-3 py-3 w-24 text-center bg-emerald-50/70 text-emerald-900 border-l border-slate-200">
+                        Mhs S1
+                      </th>
+                    )}
+                    {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s2') && (
+                      <th className="px-3 py-3 w-24 text-center bg-teal-50/70 text-teal-900 border-l border-slate-200">
+                        Mhs S2
+                      </th>
+                    )}
+                    {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s3') && (
+                      <th className="px-3 py-3 w-24 text-center bg-sky-50/70 text-sky-900 border-l border-slate-200">
+                        Mhs S3
                       </th>
                     )}
 
@@ -1312,24 +1497,68 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                             </td>
                           )}
 
-                          {/* Mahasiswa Toggle Column - Both Super Admin and Admin can manage */}
-                          {(activeRoleView === 'all' || activeRoleView === 'mahasiswa') && (
+                          {/* Mahasiswa S1 Toggle Column - Both Super Admin and Admin can manage */}
+                          {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s1') && (
                             <td className="px-3 py-3 text-center bg-emerald-50/30 border-l border-slate-200">
                               <button
                                 type="button"
-                                onClick={() => handleToggle(perm.id, 'mahasiswa')}
+                                onClick={() => handleToggle(perm.id, 'mahasiswa_s1')}
                                 className={`inline-flex items-center justify-center p-1.5 rounded-lg transition-all cursor-pointer shadow-xs ${
-                                  perm.mahasiswa
+                                  perm.mahasiswa_s1
                                     ? 'bg-emerald-600 text-white hover:bg-emerald-700'
                                     : 'bg-slate-200 text-slate-400 hover:bg-slate-300'
                                 }`}
                                 title={
-                                  perm.mahasiswa
-                                    ? 'Mahasiswa: Diizinkan (Klik untuk mengubah)'
-                                    : 'Mahasiswa: Ditolak (Klik untuk mengizinkan)'
+                                  perm.mahasiswa_s1
+                                    ? 'Mahasiswa S1: Diizinkan (Klik untuk mengubah)'
+                                    : 'Mahasiswa S1: Ditolak (Klik untuk mengizinkan)'
                                 }
                               >
-                                {perm.mahasiswa ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                                {perm.mahasiswa_s1 ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                              </button>
+                            </td>
+                          )}
+
+                          {/* Mahasiswa S2 Toggle Column - Both Super Admin and Admin can manage */}
+                          {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s2') && (
+                            <td className="px-3 py-3 text-center bg-teal-50/30 border-l border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => handleToggle(perm.id, 'mahasiswa_s2')}
+                                className={`inline-flex items-center justify-center p-1.5 rounded-lg transition-all cursor-pointer shadow-xs ${
+                                  perm.mahasiswa_s2
+                                    ? 'bg-teal-600 text-white hover:bg-teal-700'
+                                    : 'bg-slate-200 text-slate-400 hover:bg-slate-300'
+                                }`}
+                                title={
+                                  perm.mahasiswa_s2
+                                    ? 'Mahasiswa S2: Diizinkan (Klik untuk mengubah)'
+                                    : 'Mahasiswa S2: Ditolak (Klik untuk mengizinkan)'
+                                }
+                              >
+                                {perm.mahasiswa_s2 ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
+                              </button>
+                            </td>
+                          )}
+
+                          {/* Mahasiswa S3 Toggle Column - Both Super Admin and Admin can manage */}
+                          {(activeRoleView === 'all' || activeRoleView === 'mahasiswa_s3') && (
+                            <td className="px-3 py-3 text-center bg-sky-50/30 border-l border-slate-200">
+                              <button
+                                type="button"
+                                onClick={() => handleToggle(perm.id, 'mahasiswa_s3')}
+                                className={`inline-flex items-center justify-center p-1.5 rounded-lg transition-all cursor-pointer shadow-xs ${
+                                  perm.mahasiswa_s3
+                                    ? 'bg-sky-600 text-white hover:bg-sky-700'
+                                    : 'bg-slate-200 text-slate-400 hover:bg-slate-300'
+                                }`}
+                                title={
+                                  perm.mahasiswa_s3
+                                    ? 'Mahasiswa S3: Diizinkan (Klik untuk mengubah)'
+                                    : 'Mahasiswa S3: Ditolak (Klik untuk mengizinkan)'
+                                }
+                              >
+                                {perm.mahasiswa_s3 ? <Check className="w-3.5 h-3.5" /> : <X className="w-3.5 h-3.5" />}
                               </button>
                             </td>
                           )}
@@ -1366,7 +1595,7 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                 <span>
                   {isSuperAdmin
                     ? 'Super Admin: Kendali mutlak aktif. Perubahan hak akses tersimpan otomatis ke database SIKMA dan dicatat di Log Audit.'
-                    : 'Admin Departemen: Wewenang operasional aktif (Dosen & Mahasiswa). Kolom Super Admin dilindungi demi integritas keamanan.'}
+                    : 'Admin Departemen: Wewenang operasional aktif (Dosen & Mahasiswa S1/S2/S3). Kolom Super Admin dilindungi demi integritas keamanan.'}
                 </span>
               </div>
               <span className="text-[11px] font-mono text-slate-400">SIKMA-RBAC v2.4 &bull; FSTeM UB</span>
@@ -1384,8 +1613,8 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 {isSuperAdmin
-                  ? 'Sebagai Super Admin, Anda berhak mendistribusikan dan mengubah peran semua tingkat pengguna (Super Admin, Admin, Dosen, Mahasiswa).'
-                  : 'Sebagai Admin, Anda dapat menetapkan role "Dosen" atau "Mahasiswa" kepada akun pengguna. Role tingkat Super Admin dan Admin terproteksi.'}
+                  ? 'Sebagai Super Admin, Anda berhak mendistribusikan dan mengubah peran semua tingkat pengguna (Super Admin, Admin, Dosen, Mahasiswa S1, Mahasiswa S2, Mahasiswa S3, User Eksternal).'
+                  : 'Sebagai Admin, Anda dapat menetapkan role "Dosen", "Mahasiswa S1/S2/S3", atau "User Eksternal" kepada akun pengguna. Role tingkat Super Admin dan Admin terproteksi.'}
               </p>
             </div>
 
@@ -1437,20 +1666,26 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                               ? 'bg-amber-100 text-amber-900 border border-amber-200'
                               : user.role === 'dosen'
                               ? 'bg-blue-100 text-blue-900 border border-blue-200'
+                              : user.role === 'eksternal'
+                              ? 'bg-cyan-100 text-cyan-900 border border-cyan-200'
+                              : user.role === 'mahasiswa_s2'
+                              ? 'bg-teal-100 text-teal-900 border border-teal-200'
+                              : user.role === 'mahasiswa_s3'
+                              ? 'bg-sky-100 text-sky-900 border border-sky-200'
                               : 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                           }`}
                         >
                           {user.role === 'super_admin' && <Crown className="w-3 h-3 text-[#D4AF37]" />}
                           {user.role === 'admin' && <UserCheck className="w-3 h-3" />}
                           {user.role === 'dosen' && <Users className="w-3 h-3" />}
-                          {user.role === 'mahasiswa' && <GraduationCap className="w-3 h-3" />}
-                          {user.role === 'super_admin'
-                            ? 'Super Admin'
-                            : user.role === 'admin'
+                          {(user.role === 'mahasiswa_s1' || user.role === 'mahasiswa_s2' || user.role === 'mahasiswa_s3') && (
+                            <GraduationCap className="w-3 h-3" />
+                          )}
+                          {user.role === 'admin'
                             ? 'Admin Dept'
                             : user.role === 'dosen'
                             ? 'Dosen PA'
-                            : 'Mahasiswa'}
+                            : getUserRoleLabel(user.role)}
                         </span>
                       </td>
 
@@ -1472,7 +1707,10 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                               )}
                               {/* Operational roles: Always selectable by Super Admin and Admin */}
                               <option value="dosen">👨‍🏫 Dosen PA / Pembimbing</option>
-                              <option value="mahasiswa">🎓 Mahasiswa</option>
+                              <option value="mahasiswa_s1">🎓 Mahasiswa S1</option>
+                              <option value="mahasiswa_s2">🎓 Mahasiswa S2</option>
+                              <option value="mahasiswa_s3">🎓 Mahasiswa S3</option>
+                              <option value="eksternal">🏢 User Eksternal</option>
                             </select>
                             <span className="text-[10px] text-slate-400">Pilih role</span>
                           </div>
@@ -1639,11 +1877,31 @@ export const PermissionsConfigView: React.FC<PermissionsConfigViewProps> = ({ cu
                   <label className="flex items-center space-x-2 cursor-pointer">
                     <input
                       type="checkbox"
-                      checked={newRoles.mahasiswa}
-                      onChange={(e) => setNewRoles({ ...newRoles, mahasiswa: e.target.checked })}
+                      checked={newRoles.mahasiswa_s1}
+                      onChange={(e) => setNewRoles({ ...newRoles, mahasiswa_s1: e.target.checked })}
                       className="rounded text-emerald-600 focus:ring-emerald-500"
                     />
-                    <span className="font-semibold text-emerald-900">Mahasiswa</span>
+                    <span className="font-semibold text-emerald-900">Mahasiswa S1</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newRoles.mahasiswa_s2}
+                      onChange={(e) => setNewRoles({ ...newRoles, mahasiswa_s2: e.target.checked })}
+                      className="rounded text-teal-600 focus:ring-teal-500"
+                    />
+                    <span className="font-semibold text-teal-900">Mahasiswa S2</span>
+                  </label>
+
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={newRoles.mahasiswa_s3}
+                      onChange={(e) => setNewRoles({ ...newRoles, mahasiswa_s3: e.target.checked })}
+                      className="rounded text-sky-600 focus:ring-sky-500"
+                    />
+                    <span className="font-semibold text-sky-900">Mahasiswa S3</span>
                   </label>
                 </div>
               </div>

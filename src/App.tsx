@@ -17,7 +17,10 @@ import {
   LogbookMingguanKLK,
   AdminStaff,
   PLPStaff,
-  PembimbingLapanganStaff
+  PembimbingLapanganStaff,
+  isMahasiswaRole,
+  normalizeMahasiswaRole,
+  Pengumuman
 } from './types/sikma';
 import {
   INITIAL_DOSEN,
@@ -36,7 +39,7 @@ import { INITIAL_ADMIN_LIST } from './data/adminList';
 import { INITIAL_PLP_LIST } from './data/plpList';
 import { INITIAL_PEMBIMBING_LAPANGAN_LIST } from './data/pembimbingLapanganList';
 import { INITIAL_MAHASISWA_LIST } from './data/mahasiswaList';
-import { UserAccountItem, INITIAL_USER_ACCOUNTS } from './data/userList';
+import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from './data/userList';
 import {
   syncSdmToUserAccounts,
   syncBidirectionalUsersAndSdm,
@@ -72,7 +75,7 @@ import { RuanganConfigView } from './components/RuanganConfigView';
 import { ArsipConfigView } from './components/ArsipConfigView';
 import { LaboratoriumView, LabSubTab } from './components/LaboratoriumView';
 import { ProfileView } from './components/ProfileView';
-import { ShieldAlert } from 'lucide-react';
+import { ShieldAlert, KeyRound, AlertTriangle, X, Download, FileText, FileSpreadsheet } from 'lucide-react';
 
 interface AccessDeniedNoticeProps {
   menuTitle: string;
@@ -86,7 +89,7 @@ const AccessDeniedNotice: React.FC<AccessDeniedNoticeProps> = ({ menuTitle, onBa
     </div>
     <h2 className="text-xl font-bold text-slate-900 mb-2">Akses Terbatas: Menu {menuTitle}</h2>
     <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mb-6">
-      Peran <strong>Mahasiswa</strong> tidak memiliki hak untuk mengakses atau mengelola menu <strong>{menuTitle}</strong> pada sistem SIKMA Kimia UB. Menu ini hanya dapat diakses oleh Administrator dan Dosen.
+      Peran <strong>Mahasiswa (S1 / S2 / S3)</strong> tidak memiliki hak untuk mengakses atau mengelola menu <strong>{menuTitle}</strong> pada sistem SIKMA Kimia UB. Menu ini hanya dapat diakses oleh Administrator dan Dosen.
     </p>
     <button
       onClick={onBack}
@@ -130,15 +133,25 @@ export const syncKlkWithMahasiswaList = (
 };
 
 export default function App() {
-  // Authentication State (user must login first)
+  // Authentication State (always start on Login Page; session persistence disabled)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
-    const saved = localStorage.getItem('sikma_auth_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      localStorage.removeItem('sikma_auth_user');
+    } catch {}
+    return null;
   });
 
   // Navigation & Role State (Terkunci sesuai akun login, tidak bisa diubah dari dalam)
-  const [activeTab, setActiveTab] = useState<ActiveTab>('klk');
-  const currentRole: UserRole = currentUser ? currentUser.role : 'mahasiswa';
+  const [activeTab, setActiveTab] = useState<ActiveTab>(() =>
+    currentUser?.mustChangePassword ? 'profile' : 'klk'
+  );
+  const [focusSecuritySignal, setFocusSecuritySignal] = useState<number>(0);
+  const [passwordReminderNotice, setPasswordReminderNotice] = useState<string | null>(() =>
+    currentUser?.mustChangePassword
+      ? 'Peringatan Keamanan: Anda belum mengganti password awal Anda. Silakan segera ganti password di menu Profile.'
+      : null
+  );
+  const currentRole: UserRole = currentUser ? normalizeMahasiswaRole(currentUser.role, currentUser.unit) : 'mahasiswa_s1';
 
   // Persistence State
   const [dosenList, setDosenList] = useState<Dosen[]>(() => {
@@ -194,12 +207,110 @@ export default function App() {
     return saved ? JSON.parse(saved) : INITIAL_SURAT;
   });
 
+  const [pengumumanList, setPengumumanList] = useState<Pengumuman[]>(() => {
+    const saved = localStorage.getItem('sikma_pengumuman_list');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch {}
+    }
+    return PENGUMUMAN_LIST;
+  });
+
+  useEffect(() => {
+    localStorage.setItem('sikma_pengumuman_list', JSON.stringify(pengumumanList));
+  }, [pengumumanList]);
+
+  const handleAddPengumuman = (newAnn: Pengumuman) => {
+    setPengumumanList((prev) => [newAnn, ...prev]);
+  };
+
+  const handleDeletePengumuman = (id: string) => {
+    setPengumumanList((prev) => prev.filter((p) => p.id !== id));
+  };
+
+  const [showSourceCodeModal, setShowSourceCodeModal] = useState<boolean>(false);
+
+  const handleDownloadDeploymentGuide = () => {
+    const guideContent = `================================================================================
+PANDUAN DEPLOYMENT APLIKASI SIKMA KE HOSTING UNIVERSITAS BRAWIJAYA (ub.ac.id)
+Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
+================================================================================
+
+1. INFORMASI TEKNIS SISTEM
+   - Nama Aplikasi: SIKMA (Sistem Informasi Kegiatan Mahasiswa & Akademik)
+   - Framework Frontend: React 19 + TypeScript + Vite + Tailwind CSS v4
+   - Lingkungan Hosting Target: cPanel Hosting Universitas Brawijaya (ub.ac.id)
+
+2. MENGAPA HOSTING PHP/APACHE (UB.AC.ID) BISA MENJALANKAN APLIKASI INI?
+   Meskipun hosting UB umumnya berbasis PHP/Apache dan tidak menyediakan runtime Node.js, aplikasi SIKMA ini dirancang dengan arsitektur Single Page Application (SPA). Artinya, seluruh logika dan antarmuka berjalan di browser klien (client-side), sehingga Anda cukup mengunggah file hasil build statis (HTML, CSS, JS).
+
+3. LANGKAH-LANGKAH DEPLOYMENT KE CPANEL UB.AC.ID:
+   Langkah A: Di Komputer Lokal (Development)
+   - Pastikan Node.js dan npm sudah terinstal di komputer Anda.
+   - Buka terminal/command prompt di direktori proyek SIKMA.
+   - Jalankan perintah build produksi:
+     npm run build
+   - Perintah ini akan membuat folder baru bernama "dist" di root direktori proyek.
+
+   Langkah B: Di cPanel Hosting ub.ac.id
+   - Login ke akun cPanel hosting Departemen Kimia / UB Anda.
+   - Buka menu File Manager.
+   - Masuk ke direktori public_html (atau folder subdomain Anda, misal public_html/sikma).
+   - Unggah (upload) seluruh file dan folder yang berada di dalam folder "dist" (bukan folder dist-nya, melainkan isi di dalamnya seperti index.html dan folder assets).
+   - Pastikan file index.html berada langsung di dalam root folder tujuan public_html.
+
+   Langkah C: Pengujian Akses
+   - Buka browser dan akses domain Anda (misal: https://kimia.ub.ac.id/sikma).
+   - Sistem SIKMA akan langsung berjalan dengan normal.
+
+4. DUKUNGAN TEKNIS & KONTAK
+   - Tim Pengembang SIKMA Departemen Kimia FSTeM Universitas Brawijaya.
+   - Hak Cipta Dilindungi Undang-Undang © 2026.
+================================================================================`;
+
+    const blob = new Blob([guideContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'SIKMA_Panduan_Deployment_UB.txt';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadSystemBackup = () => {
+    const backupData = {
+      appName: "SIKMA Kimia UB",
+      version: "2.6.0",
+      exportDate: new Date().toISOString(),
+      institution: "Departemen Kimia FSTeM Universitas Brawijaya",
+      klkCount: klkList.length,
+      status: "Production Ready",
+      storageKeys: [
+        "sikma_auth_user",
+        "sikma_current_role",
+        "sikma_klk_data",
+        "sikma_user_accounts"
+      ]
+    };
+
+    const blob = new Blob([JSON.stringify(backupData, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'sikma_system_backup_metadata.json';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
   const [klkList, setKlkList] = useState<PengajuanKLK[]>(() => {
     try {
-      localStorage.setItem('sikma_klk_data', JSON.stringify([]));
-      localStorage.removeItem('sikma_klk_verified_students');
-      localStorage.removeItem('sikma_klk_unblocked_nims');
-      localStorage.removeItem('sikma_klk_form_submitted_id');
+      localStorage.removeItem('sikma_klk_data');
     } catch {}
     return [];
   });
@@ -238,16 +349,59 @@ export default function App() {
   });
 
   const [userList, setUserList] = useState<UserAccountItem[]>(() => {
+    const filterSherina = (items: UserAccountItem[]) =>
+      items.filter((u) => u.nama?.toLowerCase().trim() !== 'sherina' && u.username?.toLowerCase().trim() !== 'sherina');
+    const normalizeUserRole = (u: UserAccountItem): UserRole => {
+      const raw = String(u.role || '').trim().toLowerCase();
+      if (raw === 'super_admin' || raw === 'super admin' || raw === 'superadmin') {
+        return 'super_admin';
+      }
+      return normalizeMahasiswaRole(u.role, u.unit || u.jabatan);
+    };
     try {
       const saved = localStorage.getItem('sikma_user_accounts');
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          return parsed.filter((u) => u.nama?.toLowerCase().trim() !== 'sherina' && u.username?.toLowerCase().trim() !== 'sherina');
+          let changed = false;
+          const normalized = filterSherina(parsed).map((u) => ({
+            ...u,
+            role: normalizeUserRole(u)
+          }));
+          if (!normalized.some((u) => u.role === 'super_admin')) {
+            const seedSuperAdmin = INITIAL_USER_ACCOUNTS.find((u) => u.role === 'super_admin') || INITIAL_USER_ACCOUNTS[0];
+            normalized.unshift(seedSuperAdmin);
+            changed = true;
+          }
+          if (!localStorage.getItem('sikma_mhs_s1_s2_s3_migrated_v1')) {
+            for (const extraRole of ['mahasiswa_s2', 'mahasiswa_s3'] as const) {
+              if (!normalized.some((u) => u.role === extraRole)) {
+                const seedUser = INITIAL_USER_ACCOUNTS.find((u) => u.role === extraRole);
+                if (seedUser) normalized.push(seedUser);
+              }
+            }
+            localStorage.setItem('sikma_mhs_s1_s2_s3_migrated_v1', 'true');
+            changed = true;
+          }
+          let finalAccounts = normalized;
+          if (!localStorage.getItem(NIM_NIP_MIGRATION_FLAG)) {
+            const migRes = migrateUsernamesToNimNip(normalized);
+            finalAccounts = migRes.migrated;
+            localStorage.setItem(NIM_NIP_MIGRATION_FLAG, 'true');
+            if (migRes.changed) changed = true;
+          }
+          if (changed) {
+            localStorage.setItem('sikma_user_accounts', JSON.stringify(finalAccounts));
+          }
+          return finalAccounts;
         }
       }
     } catch {}
-    return INITIAL_USER_ACCOUNTS.filter((u) => u.nama?.toLowerCase().trim() !== 'sherina' && u.username?.toLowerCase().trim() !== 'sherina');
+    try {
+      localStorage.setItem('sikma_mhs_s1_s2_s3_migrated_v1', 'true');
+      localStorage.setItem(NIM_NIP_MIGRATION_FLAG, 'true');
+    } catch {}
+    return filterSherina(INITIAL_USER_ACCOUNTS);
   });
 
   // Save changes to localStorage
@@ -298,7 +452,7 @@ export default function App() {
         setActiveTab('klk');
       }
     }
-    if (currentRole === 'mahasiswa') {
+    if (isMahasiswaRole(currentRole)) {
       const restrictedTabs: ActiveTab[] = [
         'permissions',
         'config-permissions',
@@ -326,11 +480,7 @@ export default function App() {
     if (currentRole === 'eksternal') {
       const allowedEksternalTabs: ActiveTab[] = [
         'klk',
-        'pembimbing-lapangan-management',
-        'profile',
-        'pengumuman',
-        'instansi',
-        'config-instansi'
+        'profile'
       ];
       if (!allowedEksternalTabs.includes(activeTab)) {
         setActiveTab('klk');
@@ -366,12 +516,17 @@ export default function App() {
     // 1. Update DPA pada Mahasiswa jika nama/gelar Dosen diperbarui
     const syncedMahasiswa = activeMahasiswa.map((m) => {
       if (!m.dosenPANama && !m.dosenPAId) return m;
-      const matchedDosen = activeDosen.find(
-        (d) =>
-          (m.dosenPAId && d.id === m.dosenPAId) ||
-          (d.nip && m.dosenPANip && d.nip.replace(/\D/g, '') === m.dosenPANip.replace(/\D/g, '')) ||
-          (m.dosenPANama && isNameMatch(d.nama, m.dosenPANama))
-      );
+      const matchedDosen = m.dosenPANama
+        ? activeDosen.find(
+            (d) =>
+              isNameMatch(d.nama, m.dosenPANama) ||
+              (d.nip && m.dosenPANip && d.nip.replace(/\D/g, '') === m.dosenPANip.replace(/\D/g, ''))
+          )
+        : activeDosen.find(
+            (d) =>
+              (m.dosenPAId && d.id === m.dosenPAId) ||
+              (d.nip && m.dosenPANip && d.nip.replace(/\D/g, '') === m.dosenPANip.replace(/\D/g, ''))
+          );
       if (matchedDosen) {
         const fullDosenNama = `${matchedDosen.nama}${matchedDosen.gelar ? ', ' + matchedDosen.gelar : ''}`;
         return {
@@ -411,7 +566,7 @@ export default function App() {
     });
 
     // 3. Update student state jika profil mahasiswa aktif berubah atau terhapus
-    if (currentUser && currentUser.role === 'mahasiswa') {
+    if (currentUser && isMahasiswaRole(currentUser.role)) {
       const cleanNim = (currentUser.identifier || '').replace(/\D/g, '');
       const matchedMhs = syncedMahasiswa.find(
         (m) =>
@@ -462,12 +617,19 @@ export default function App() {
 
     // 6. Update currentUser jika profil login berubah
     if (currentUser) {
+      const cleanCurrId = (currentUser.identifier || '').replace(/\D/g, '');
       const updatedAuth = activeUsers.find(
-        (u) => u.id === currentUser.id || u.username === currentUser.username
+        (u) =>
+          u.id === currentUser.id ||
+          u.username === currentUser.username ||
+          (u.role === currentUser.role &&
+            ((cleanCurrId && isIdentifierMatch(u.identifier, cleanCurrId)) ||
+              isNameMatch(u.nama, currentUser.nama)))
       );
       if (
         updatedAuth &&
-        (updatedAuth.nama !== currentUser.nama ||
+        (updatedAuth.username !== currentUser.username ||
+          updatedAuth.nama !== currentUser.nama ||
           updatedAuth.email !== currentUser.email ||
           updatedAuth.role !== currentUser.role ||
           updatedAuth.identifier !== currentUser.identifier ||
@@ -477,6 +639,8 @@ export default function App() {
       ) {
         const nextAuth: AuthUser = {
           ...currentUser,
+          id: updatedAuth.id,
+          username: updatedAuth.username,
           nama: updatedAuth.nama,
           email: updatedAuth.email,
           role: updatedAuth.role,
@@ -486,9 +650,6 @@ export default function App() {
           avatarText: updatedAuth.avatarText
         };
         setCurrentUser(nextAuth);
-        try {
-          localStorage.setItem('sikma_auth_user', JSON.stringify(nextAuth));
-        } catch {}
       }
     }
 
@@ -581,7 +742,7 @@ export default function App() {
       nextUsers = userList.filter(
         (u) =>
           !(
-            (u.role === 'admin' || u.role === 'super_admin') &&
+            u.role === 'admin' &&
             (isUserMatchingEntity(u, targetAdmin) ||
               isNameMatch(u.nama, targetAdmin.nama) ||
               isIdentifierMatch(u.identifier, targetAdmin.nip))
@@ -599,7 +760,7 @@ export default function App() {
     const nextUsers = userList.filter(
       (u) =>
         !(
-          (u.role === 'admin' || u.role === 'super_admin') &&
+          u.role === 'admin' &&
           targets.some(
             (targetAdmin) =>
               isUserMatchingEntity(u, targetAdmin) ||
@@ -638,7 +799,7 @@ export default function App() {
       nextUsers = userList.filter(
         (u) =>
           !(
-            u.role === 'mahasiswa' &&
+            isMahasiswaRole(u.role) &&
             (isUserMatchingEntity(u, targetMhs) ||
               isNameMatch(u.nama, targetMhs.nama) ||
               isIdentifierMatch(u.identifier, targetMhs.nim))
@@ -662,7 +823,7 @@ export default function App() {
     const nextUsers = userList.filter(
       (u) =>
         !(
-          u.role === 'mahasiswa' &&
+          isMahasiswaRole(u.role) &&
           targets.some(
             (targetMhs) =>
               isUserMatchingEntity(u, targetMhs) ||
@@ -698,7 +859,7 @@ export default function App() {
       nextUsers = userList.filter(
         (u) =>
           !(
-            (u.role === 'admin' || u.role === 'super_admin') &&
+            u.role === 'admin' &&
             (isUserMatchingEntity(u, targetPlp) ||
               isNameMatch(u.nama, targetPlp.nama) ||
               isIdentifierMatch(u.identifier, targetPlp.nip))
@@ -716,7 +877,7 @@ export default function App() {
     const nextUsers = userList.filter(
       (u) =>
         !(
-          (u.role === 'admin' || u.role === 'super_admin') &&
+          u.role === 'admin' &&
           targets.some(
             (targetPlp) =>
               isUserMatchingEntity(u, targetPlp) ||
@@ -841,13 +1002,31 @@ export default function App() {
     status: PengajuanKLK['status'],
     nomorSurat?: string
   ) => {
+    const waktuNow = new Date().toLocaleString('id-ID', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    }).replace('.', ':') + ' WIB';
     setKlkList((prev) =>
       prev.map((k) =>
         k.id === id
           ? {
               ...k,
               status,
-              ...(nomorSurat ? { nomorSuratTugas: nomorSurat } : {})
+              ...(nomorSurat ? { nomorSuratTugas: nomorSurat } : {}),
+              ...(status === 'Disetujui' || status === 'Disetujui / Sedang Berjalan'
+                ? {
+                    suratPengantarTerkirimKeMahasiswa: true,
+                    waktuKirimSuratPengantarKeMahasiswa: k.waktuKirimSuratPengantarKeMahasiswa || waktuNow
+                  }
+                : status === 'Ditolak'
+                ? {
+                    suratPengantarTerkirimKeMahasiswa: false,
+                    waktuKirimSuratPengantarKeMahasiswa: undefined
+                  }
+                : {})
             }
           : k
       )
@@ -942,6 +1121,9 @@ export default function App() {
       localStorage.removeItem('sikma_klk_unblocked_nims');
       localStorage.removeItem('sikma_klk_verify_lock_clean_v1');
       localStorage.removeItem('sikma_klk_form_submitted_id');
+      localStorage.removeItem('sikma_klk_berkas_checklist_v1');
+      localStorage.removeItem('sikma_klk_dosen_akademik_check_v1');
+      sessionStorage.removeItem('sikma_klk_form_submitted_id');
     } catch {}
     syncAllModules(dosenList, mahasiswaList, adminList, plpList, []);
   };
@@ -961,18 +1143,85 @@ export default function App() {
     (l) => l.statusVerifikasi === 'Menunggu Verifikasi'
   ).length;
 
+  const activeUserAccount = currentUser
+    ? userList.find(
+        (u) =>
+          u.id === currentUser.id ||
+          (currentUser.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+      )
+    : undefined;
+
+  const requiresPasswordChange = Boolean(
+    currentUser &&
+      (activeUserAccount?.mustChangePassword ?? currentUser.mustChangePassword) &&
+      !(activeUserAccount?.passwordChangedAt || currentUser.passwordChangedAt)
+  );
+
   // Auth Handlers
   const handleLoginSuccess = (user: AuthUser) => {
-    setCurrentUser(user);
-    localStorage.setItem('sikma_auth_user', JSON.stringify(user));
-    if (user.role === 'mahasiswa') {
-      const cleanNim = (user.identifier || '').replace(/\D/g, '');
+    let latestUsers = userList;
+    try {
+      const savedUsers = localStorage.getItem('sikma_user_accounts');
+      if (savedUsers) {
+        const parsedUsers = JSON.parse(savedUsers);
+        if (Array.isArray(parsedUsers)) {
+          latestUsers = parsedUsers;
+          setUserList(parsedUsers);
+        }
+      }
+    } catch {}
+
+    const matchedAcc = latestUsers.find(
+      (u) =>
+        u.id === user.id ||
+        (user.username && u.username.toLowerCase() === user.username.toLowerCase())
+    );
+    const isFirstLogin =
+      Boolean(user.isFirstLogin) ||
+      !matchedAcc?.terakhirLogin ||
+      matchedAcc.terakhirLogin === 'Belum pernah login';
+    const pendingChange =
+      Boolean(user.mustChangePassword || matchedAcc?.mustChangePassword || isFirstLogin) &&
+      !(user.passwordChangedAt || matchedAcc?.passwordChangedAt);
+
+    const enrichedUser: AuthUser = {
+      ...user,
+      isFirstLogin,
+      mustChangePassword: pendingChange,
+      passwordChangedAt: user.passwordChangedAt || matchedAcc?.passwordChangedAt
+    };
+
+    setCurrentUser(enrichedUser);
+    try {
+      sessionStorage.removeItem('sikma_klk_form_submitted_id');
+      Object.keys(sessionStorage).forEach((storageKey) => {
+        if (storageKey.startsWith('sikma_klk_active_subtab_')) {
+          sessionStorage.removeItem(storageKey);
+        }
+      });
+    } catch {}
+
+    if (pendingChange) {
+      setActiveTab('profile');
+      setFocusSecuritySignal((s) => s + 1);
+      setPasswordReminderNotice(
+        isFirstLogin
+          ? 'Login Pertama Kali: Demi keamanan akun, Anda diarahkan ke menu Profile. Silakan segera ganti password awal Anda.'
+          : 'Peringatan Keamanan: Anda belum mengganti password awal sejak login pertama. Silakan segera ganti password Anda di menu Profile.'
+      );
+    } else {
+      setActiveTab('klk');
+      setPasswordReminderNotice(null);
+    }
+
+    if (isMahasiswaRole(enrichedUser.role)) {
+      const cleanNim = (enrichedUser.identifier || '').replace(/\D/g, '');
       const matchedMhs = mahasiswaList.find(
         (m) =>
-          m.id === user.id ||
+          m.id === enrichedUser.id ||
           (cleanNim && m.nim.replace(/\D/g, '') === cleanNim) ||
-          isNameMatch(m.nama, user.nama) ||
-          (user.username && isNameMatch(m.nama, user.username))
+          isNameMatch(m.nama, enrichedUser.nama) ||
+          (enrichedUser.username && isNameMatch(m.nama, enrichedUser.username))
       );
       if (matchedMhs) {
         setStudent(matchedMhs);
@@ -985,7 +1234,7 @@ export default function App() {
 
   // Pastikan data mahasiswa aktif sinkron dengan akun user yang sedang aktif
   useEffect(() => {
-    if (currentUser && currentUser.role === 'mahasiswa') {
+    if (currentUser && isMahasiswaRole(currentUser.role)) {
       const cleanNim = (currentUser.identifier || '').replace(/\D/g, '');
       const matchedMhs = mahasiswaList.find(
         (m) =>
@@ -1005,7 +1254,16 @@ export default function App() {
 
   const handleLogout = () => {
     setCurrentUser(null);
+    setPasswordReminderNotice(null);
     localStorage.removeItem('sikma_auth_user');
+    try {
+      sessionStorage.removeItem('sikma_klk_form_submitted_id');
+      Object.keys(sessionStorage).forEach((storageKey) => {
+        if (storageKey.startsWith('sikma_klk_active_subtab_')) {
+          sessionStorage.removeItem(storageKey);
+        }
+      });
+    } catch {}
   };
 
   // If user is not logged in, show the Login Page first
@@ -1031,6 +1289,11 @@ export default function App() {
           activeTab={activeTab}
           onTabChange={(tab) => {
             setActiveTab(tab);
+            if (requiresPasswordChange && tab !== 'profile') {
+              setPasswordReminderNotice(
+                'Peringatan: Anda belum mengganti password awal. Silakan segera ganti password Anda di menu Profile → Keamanan & Kata Sandi.'
+              );
+            }
             if (typeof window !== 'undefined') {
               window.scrollTo({ top: 0, behavior: 'auto' });
             }
@@ -1046,13 +1309,144 @@ export default function App() {
 
         {/* Dynamic Content View Area */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto w-full min-w-0">
+          {/* Floating Toast Notifikasi Wajib Ganti Password */}
+          {requiresPasswordChange && passwordReminderNotice && (
+            <div className="fixed bottom-6 right-6 z-50 max-w-md bg-amber-950 text-white px-4 py-3.5 rounded-2xl shadow-2xl border-2 border-amber-400 flex items-start gap-3">
+              <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+              <div className="flex-1 space-y-2">
+                <p className="text-xs font-semibold leading-relaxed text-amber-50">
+                  {passwordReminderNotice}
+                </p>
+                {activeTab !== 'profile' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveTab('profile');
+                      setFocusSecuritySignal((s) => s + 1);
+                    }}
+                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-amber-950 font-bold rounded-lg text-[11px] inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <KeyRound className="w-3.5 h-3.5" />
+                    <span>Ganti Password Sekarang</span>
+                  </button>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setPasswordReminderNotice(null)}
+                className="text-amber-300 hover:text-white p-0.5 rounded cursor-pointer"
+                title="Tutup notifikasi sementara"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          )}
+
+          {/* Persistent Global Banner di semua menu selain Profile sampai password diganti */}
+          {requiresPasswordChange && activeTab !== 'profile' && (
+            <div className="mb-6 bg-amber-50 border-2 border-amber-400 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-start gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-100 border border-amber-300 text-amber-700 flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs sm:text-sm font-extrabold text-amber-950">
+                    Peringatan: Anda Belum Mengganti Password Awal!
+                  </p>
+                  <p className="text-xs text-amber-900 mt-0.5">
+                    Demi keamanan akun SIKMA, mohon segera perbarui kata sandi Anda melalui menu <strong>Profile → Keamanan &amp; Kata Sandi</strong>. Peringatan ini akan tetap tampil sampai Anda mengganti password.
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveTab('profile');
+                  setFocusSecuritySignal((s) => s + 1);
+                }}
+                className="px-4 py-2 bg-[#002B49] hover:bg-[#003865] text-white text-xs font-bold rounded-xl shadow-sm shrink-0 flex items-center gap-1.5 cursor-pointer"
+              >
+                <KeyRound className="w-3.5 h-3.5 text-yellow-400" />
+                <span>Ke Menu Profile &amp; Ganti Password</span>
+              </button>
+            </div>
+          )}
+
           {activeTab === 'profile' && (
             <ProfileView
               currentUser={currentUser}
               currentRole={currentRole}
+              userList={userList}
+              dosenList={dosenList}
+              mahasiswaList={mahasiswaList}
+              adminList={adminList}
+              plpList={plpList}
+              pembimbingLapanganList={pembimbingLapanganList}
               onUpdateUser={(updated) => {
                 setCurrentUser(updated);
               }}
+              onSaveSyncedProfile={({
+                updatedAuth,
+                updatedUserList,
+                updatedDosenList,
+                updatedMahasiswaList,
+                updatedAdminList,
+                updatedPlpList,
+                updatedPembimbingLapanganList,
+                updatedKlkList,
+                updatedLogbooks,
+                updatedSeminarList,
+                updatedSuratList
+              }) => {
+                setCurrentUser(updatedAuth);
+                syncAllModules(
+                  updatedDosenList,
+                  updatedMahasiswaList,
+                  updatedAdminList,
+                  updatedPlpList,
+                  updatedKlkList,
+                  updatedUserList,
+                  updatedPembimbingLapanganList,
+                  updatedLogbooks,
+                  updatedSeminarList,
+                  updatedSuratList
+                );
+              }}
+              onUpdateUserPassword={(userId, hashedPassword) => {
+                const changedAt = new Date().toISOString();
+                const nextUsers = userList.map((u) =>
+                  u.id === userId ||
+                  (currentUser?.username && u.username.toLowerCase() === currentUser.username.toLowerCase())
+                    ? {
+                        ...u,
+                        password: hashedPassword,
+                        mustChangePassword: false,
+                        passwordChangedAt: changedAt
+                      }
+                    : u
+                );
+                setUserList(nextUsers);
+                try {
+                  localStorage.setItem('sikma_user_accounts', JSON.stringify(nextUsers));
+                } catch {}
+
+                if (currentUser) {
+                  const updatedAuth: AuthUser = {
+                    ...currentUser,
+                    mustChangePassword: false,
+                    isFirstLogin: false,
+                    passwordChangedAt: changedAt
+                  };
+                  setCurrentUser(updatedAuth);
+                }
+                setPasswordReminderNotice(null);
+              }}
+              mustChangePassword={requiresPasswordChange}
+              focusSecuritySignal={focusSecuritySignal}
+              klkList={klkList}
+              logbooks={logbooks}
+              seminarList={seminarList}
+              suratList={suratList}
             />
           )}
 
@@ -1064,7 +1458,7 @@ export default function App() {
           )}
 
           {(activeTab === 'user' || activeTab === 'config-user') && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice menuTitle="User (Manajemen Akun)" onBack={() => setActiveTab('klk')} />
             ) : (
               <UserConfigView
@@ -1121,7 +1515,7 @@ export default function App() {
           )}
 
           {(activeTab === 'semester' || activeTab === 'config-semester') && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice menuTitle="Semester Akademik" onBack={() => setActiveTab('klk')} />
             ) : (
               <SemesterConfigView
@@ -1131,7 +1525,7 @@ export default function App() {
           )}
 
           {(activeTab === 'instansi' || activeTab === 'config-instansi') && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice menuTitle="Instansi Mitra" onBack={() => setActiveTab('klk')} />
             ) : (
               <InstansiConfigView
@@ -1147,7 +1541,7 @@ export default function App() {
           )}
 
           {(activeTab === 'ruangan' || activeTab === 'config-ruangan') && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice menuTitle="Ruangan & Fasilitas" onBack={() => setActiveTab('klk')} />
             ) : (
               <RuanganConfigView
@@ -1157,7 +1551,7 @@ export default function App() {
           )}
 
           {(activeTab === 'arsip' || activeTab === 'config-arsip') && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice menuTitle="Arsip Departemen" onBack={() => setActiveTab('klk')} />
             ) : (
               <ArsipConfigView
@@ -1233,7 +1627,7 @@ export default function App() {
           )}
 
           {activeTab === 'data-mahasiswa' && (
-            currentRole === 'mahasiswa' ? (
+            isMahasiswaRole(currentRole) ? (
               <AccessDeniedNotice
                 menuTitle="Data Mahasiswa (Sumber Daya Manusia)"
                 onBack={() => setActiveTab('klk')}
@@ -1364,6 +1758,7 @@ export default function App() {
 
           {activeTab === 'klk' && (
             <KlkView
+              key={currentUser?.id || currentUser?.username || currentRole}
               currentRole={currentRole}
               currentUser={currentUser}
               student={student}
@@ -1386,7 +1781,13 @@ export default function App() {
           )}
 
           {activeTab === 'pengumuman' && (
-            <PengumumanView pengumumanList={PENGUMUMAN_LIST} />
+            <PengumumanView
+              pengumumanList={pengumumanList}
+              currentUserRole={currentRole}
+              currentUserName={currentUser?.nama || 'Administrator'}
+              onAddPengumuman={handleAddPengumuman}
+              onDeletePengumuman={handleDeletePengumuman}
+            />
           )}
 
           {activeTab === 'ci3-architecture' && (
@@ -1405,14 +1806,29 @@ export default function App() {
           <div>
             &copy; 2026 <strong>Departemen Kimia FSTeM Universitas Brawijaya</strong>. Hak Cipta Dilindungi Undang-Undang.
           </div>
-          <div className="flex items-center space-x-4 text-[11px]">
+          <div className="flex items-center space-x-4 text-[11px] flex-wrap gap-y-1">
             <span>SIKMA Kimia UB Portal</span>
+            {currentRole === 'super_admin' && (
+              <>
+                <span>&bull;</span>
+                <button
+                  type="button"
+                  onClick={() => setShowSourceCodeModal(true)}
+                  className="text-[#D4AF37] hover:underline font-bold flex items-center gap-1 cursor-pointer"
+                  title="Akses Eksklusif Super Admin: Unduh Source Code & Panduan SIKMA"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Unduh Source Code SIKMA</span>
+                </button>
+              </>
+            )}
             {(currentRole === 'super_admin' || currentRole === 'admin') && (
               <>
                 <span>&bull;</span>
                 <button
+                  type="button"
                   onClick={() => setActiveTab('ci3-architecture')}
-                  className="text-[#D4AF37] hover:underline"
+                  className="text-[#D4AF37] hover:underline cursor-pointer"
                 >
                   Unduh Kode CI3
                 </button>
@@ -1421,6 +1837,86 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Modal Unduh Source Code & Panduan Deployment SIKMA (Khusus Super Admin) */}
+      {showSourceCodeModal && (
+        <div className="fixed inset-0 z-[100] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-200">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full overflow-hidden flex flex-col">
+            <div className="bg-gradient-to-r from-[#002B49] to-[#003865] p-5 text-white flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-[#D4AF37] text-[#002B49] flex items-center justify-center font-black">
+                  <Download className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-base font-extrabold">Pusat Unduhan Source Code &amp; Panduan</h3>
+                  <p className="text-[11px] text-slate-200">Akses Eksklusif Super Admin • Departemen Kimia FSTeM UB</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowSourceCodeModal(false)}
+                className="text-slate-300 hover:text-white p-1 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4 text-xs text-slate-700">
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl space-y-1.5 text-amber-900">
+                <div className="font-bold flex items-center gap-1.5 text-amber-950">
+                  <ShieldAlert className="w-4 h-4 text-amber-700" />
+                  <span>Keamanan &amp; Hak Akses Terbatas</span>
+                </div>
+                <p className="text-[11px] leading-relaxed">
+                  Fitur unduh arsip source code dan panduan deployment ini khusus disediakan untuk akun <strong>Super Admin</strong>. Silakan gunakan tautan di bawah ini untuk mengunduh dokumen panduan teknis hosting cPanel (<code className="bg-amber-100 px-1 rounded font-mono">ub.ac.id</code>) atau snapshot sistem.
+                </p>
+              </div>
+
+              <div className="space-y-3 pt-2">
+                <button
+                  type="button"
+                  onClick={handleDownloadDeploymentGuide}
+                  className="w-full py-3 px-4 bg-[#002B49] hover:bg-[#003861] text-white font-bold rounded-xl text-xs flex items-center justify-between shadow-xs cursor-pointer transition"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <FileText className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Unduh Panduan Deployment cPanel (`ub.ac.id`)</span>
+                  </div>
+                  <Download className="w-4 h-4 text-[#D4AF37]" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleDownloadSystemBackup}
+                  className="w-full py-3 px-4 bg-white hover:bg-slate-50 text-slate-800 font-bold rounded-xl border border-slate-300 text-xs flex items-center justify-between shadow-xs cursor-pointer transition"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                    <span>Unduh Snapshot Metadata Sistem SIKMA (.json)</span>
+                  </div>
+                  <Download className="w-4 h-4 text-slate-500" />
+                </button>
+              </div>
+
+              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-1 text-[11px] text-slate-600">
+                <span className="font-bold text-slate-800 block">Petunjuk Singkat Cepat ke Hosting UB:</span>
+                <p>1. Jalankan <code className="bg-slate-200 px-1 rounded font-mono">npm run build</code> di komputer lokal.</p>
+                <p>2. Upload seluruh file isi folder <code className="bg-slate-200 px-1 rounded font-mono">dist/</code> ke <code className="bg-slate-200 px-1 rounded font-mono">public_html</code> cPanel ub.ac.id.</p>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 px-6 py-3 border-t border-slate-200 flex items-center justify-end">
+              <button
+                type="button"
+                onClick={() => setShowSourceCodeModal(false)}
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 font-bold rounded-xl text-xs cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

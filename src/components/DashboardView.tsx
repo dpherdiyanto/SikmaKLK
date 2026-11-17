@@ -6,7 +6,9 @@ import {
   Pengumuman,
   UserRole,
   ActiveTab,
-  LogbookLabItem
+  LogbookLabItem,
+  isMahasiswaRole,
+  getMahasiswaJenjang
 } from '../types/sikma';
 import {
   Users,
@@ -86,7 +88,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 {currentRole === 'super_admin' && 'Prof. Dr. Dra. Hermin Sulistyarti, M.Si (Ketua Dept)'}
                 {currentRole === 'admin' && 'Biro Administrasi & Laboran Kimia UB'}
                 {currentRole === 'dosen' && 'Akhmad Sabarudin, Dr.Sc. (Dosen Pembimbing)'}
-                {currentRole === 'mahasiswa' && student.nama}
+                {isMahasiswaRole(currentRole) && student.nama}
+                {currentRole === 'eksternal' && 'Pembimbing Lapangan Mitra Industri KLK'}
               </span>
             </h2>
             <p className="text-sm text-slate-300 max-w-2xl leading-relaxed">
@@ -96,8 +99,10 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                 'Pusat kendali master data dosen Departemen Kimia, penjadwalan ujian sidang, dan legalitas surat akademik.'}
               {currentRole === 'dosen' &&
                 'Kelola verifikasi logbook riset laboratorium kimia, kuota bimbingan skripsi, dan penugasan penguji seminar.'}
-              {currentRole === 'mahasiswa' &&
-                `Anda terdaftar aktif pada Program Studi S1 Kimia semester ${student.semester} dengan status Tugas Akhir di ${student.labPenelitian}.`}
+              {currentRole === 'eksternal' &&
+                'Akses khusus Pembimbing Lapangan KLK untuk memantau logbook mingguan dan evaluasi kinerja industri mahasiswa.'}
+              {isMahasiswaRole(currentRole) &&
+                `Anda terdaftar aktif pada Program Studi ${getMahasiswaJenjang(currentRole)} Kimia semester ${student.semester} dengan status Tugas Akhir di ${student.labPenelitian}.`}
             </p>
           </div>
 
@@ -110,7 +115,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <Briefcase className="w-4 h-4" />
               <span>Menu KLK</span>
             </button>
-            {currentRole !== 'mahasiswa' && (
+            {!isMahasiswaRole(currentRole) && (
               <button
                 onClick={() => onNavigate('data-mahasiswa')}
                 className="px-4 py-2 bg-[#D4AF37] text-[#002B49] rounded-lg text-xs font-bold hover:bg-[#c49f2e] transition-colors flex items-center gap-1.5 shadow-sm"

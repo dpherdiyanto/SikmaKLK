@@ -6,7 +6,8 @@ import {
   DataAlatItem,
   DataBahanItem,
   BonAlatItem,
-  BonBahanItem
+  BonBahanItem,
+  isMahasiswaRole
 } from '../types/sikma';
 import {
   INITIAL_LAB_LIST,
@@ -50,7 +51,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
 }) => {
   // Active sub-tab state (synchronized with prop if passed)
   const [currentTab, setCurrentTab] = useState<LabSubTab>(() => {
-    if (currentRole === 'mahasiswa' && (activeSubMenu === 'data-alat' || activeSubMenu === 'data-bahan')) {
+    if (isMahasiswaRole(currentRole) && (activeSubMenu === 'data-alat' || activeSubMenu === 'data-bahan')) {
       return 'data-laboratorium';
     }
     return activeSubMenu;
@@ -58,7 +59,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
 
   useEffect(() => {
     if (activeSubMenu) {
-      if (currentRole === 'mahasiswa' && (activeSubMenu === 'data-alat' || activeSubMenu === 'data-bahan')) {
+      if (isMahasiswaRole(currentRole) && (activeSubMenu === 'data-alat' || activeSubMenu === 'data-bahan')) {
         setCurrentTab('data-laboratorium');
       } else {
         setCurrentTab(activeSubMenu);
@@ -67,13 +68,13 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
   }, [activeSubMenu, currentRole]);
 
   useEffect(() => {
-    if (currentRole === 'mahasiswa' && (currentTab === 'data-alat' || currentTab === 'data-bahan')) {
+    if (isMahasiswaRole(currentRole) && (currentTab === 'data-alat' || currentTab === 'data-bahan')) {
       setCurrentTab('data-laboratorium');
     }
   }, [currentRole, currentTab]);
 
   const handleTabClick = (tab: LabSubTab) => {
-    if (currentRole === 'mahasiswa' && (tab === 'data-alat' || tab === 'data-bahan')) {
+    if (isMahasiswaRole(currentRole) && (tab === 'data-alat' || tab === 'data-bahan')) {
       return;
     }
     setCurrentTab(tab);
@@ -301,20 +302,20 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
   };
 
   const handleGoToDataAlat = (labId: string) => {
-    if (currentRole === 'mahasiswa') return;
+    if (isMahasiswaRole(currentRole)) return;
     setFilterLabIdForAlat(labId);
     handleTabClick('data-alat');
   };
 
   const handleGoToDataBahan = (labId: string) => {
-    if (currentRole === 'mahasiswa') return;
+    if (isMahasiswaRole(currentRole)) return;
     setFilterLabIdForBahan(labId);
     handleTabClick('data-bahan');
   };
 
   // Helper filter for student personal data
   const isOwnBonAlat = (b: BonAlatItem) => {
-    if (currentRole !== 'mahasiswa' || !currentUser) return true;
+    if (!isMahasiswaRole(currentRole) || !currentUser) return true;
     const curName = (currentUser.nama || '').trim().toLowerCase();
     const curNim = (currentUser.identifier || '').replace(/\D/g, '');
     const curUsername = (currentUser.username || '').trim().toLowerCase();
@@ -328,7 +329,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
   };
 
   const isOwnBonBahan = (b: BonBahanItem) => {
-    if (currentRole !== 'mahasiswa' || !currentUser) return true;
+    if (!isMahasiswaRole(currentRole) || !currentUser) return true;
     const curName = (currentUser.nama || '').trim().toLowerCase();
     const curNim = (currentUser.identifier || '').replace(/\D/g, '');
     const curUsername = (currentUser.username || '').trim().toLowerCase();
@@ -341,8 +342,8 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
     );
   };
 
-  const visibleBonAlatList = currentRole === 'mahasiswa' ? bonAlatList.filter(isOwnBonAlat) : bonAlatList;
-  const visibleBonBahanList = currentRole === 'mahasiswa' ? bonBahanList.filter(isOwnBonBahan) : bonBahanList;
+  const visibleBonAlatList = isMahasiswaRole(currentRole) ? bonAlatList.filter(isOwnBonAlat) : bonAlatList;
+  const visibleBonBahanList = isMahasiswaRole(currentRole) ? bonBahanList.filter(isOwnBonBahan) : bonBahanList;
 
   // Counters
   const pendingBonAlatCount = visibleBonAlatList.filter((b) => b.status === 'Menunggu Persetujuan').length;
@@ -402,7 +403,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
           </div>
           <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
             <div className="text-[11px] text-slate-500 font-medium">
-              {currentRole === 'mahasiswa' ? 'Bon Pending Saya' : 'Permohonan Bon Pending'}
+              {isMahasiswaRole(currentRole) ? 'Bon Pending Saya' : 'Permohonan Bon Pending'}
             </div>
             <div className="text-lg font-bold text-slate-900 mt-0.5">
               {pendingBonAlatCount + pendingBonBahanCount} Pengajuan
@@ -435,7 +436,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
           </span>
         </button>
 
-        {currentRole !== 'mahasiswa' && (
+        {!isMahasiswaRole(currentRole) && (
           <>
             <button
               onClick={() => handleTabClick('data-alat')}
@@ -486,7 +487,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
           }`}
         >
           <ClipboardList className={`w-3.5 h-3.5 ${currentTab === 'bon-alat' ? 'text-[#D4AF37]' : ''}`} />
-          <span>{currentRole === 'mahasiswa' ? 'Bon Alat Saya' : 'Bon Alat'}</span>
+          <span>{isMahasiswaRole(currentRole) ? 'Bon Alat Saya' : 'Bon Alat'}</span>
           {pendingBonAlatCount > 0 ? (
             <span className="text-[10px] px-1.5 py-0.2 rounded-full font-bold bg-amber-500 text-white animate-pulse">
               {pendingBonAlatCount} Pending
@@ -511,7 +512,7 @@ export const LaboratoriumView: React.FC<LaboratoriumViewProps> = ({
           }`}
         >
           <FileSpreadsheet className={`w-3.5 h-3.5 ${currentTab === 'bon-bahan' ? 'text-[#D4AF37]' : ''}`} />
-          <span>{currentRole === 'mahasiswa' ? 'Bon Bahan Saya' : 'Bon Bahan'}</span>
+          <span>{isMahasiswaRole(currentRole) ? 'Bon Bahan Saya' : 'Bon Bahan'}</span>
           {pendingBonBahanCount > 0 ? (
             <span className="text-[10px] px-1.5 py-0.2 rounded-full font-bold bg-amber-500 text-white animate-pulse">
               {pendingBonBahanCount} Pending

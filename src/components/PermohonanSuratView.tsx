@@ -1,5 +1,5 @@
 import React, { useState, useId, useRef, useMemo } from 'react';
-import { Mahasiswa, Dosen, UserRole, SemesterItem, AuthUser } from '../types/sikma';
+import { Mahasiswa, Dosen, UserRole, SemesterItem, AuthUser, isMahasiswaRole } from '../types/sikma';
 import { INITIAL_MAHASISWA_LIST } from '../data/mahasiswaList';
 import { INITIAL_DOSEN } from '../data/mockData';
 import { INITIAL_LAB_LIST } from '../data/labData';
@@ -110,7 +110,7 @@ interface PermohonanSuratViewProps {
 }
 
 export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
-  currentRole = 'mahasiswa',
+  currentRole = 'mahasiswa_s1',
   student,
   currentUser
 }) => {
@@ -1023,7 +1023,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
 
   // Helper: Cek apakah data mahasiswa adalah milik akun yang sedang login
   const isOwnStudent = (m: Mahasiswa): boolean => {
-    if (currentRole !== 'mahasiswa') return true;
+    if (!isMahasiswaRole(currentRole)) return true;
 
     // 1. Cek dari currentUser prop
     if (currentUser) {
@@ -1057,7 +1057,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
 
   // Base list mahasiswa yang disaring berdasarkan hak akses role mahasiswa
   const baseMahasiswaList = useMemo(() => {
-    if (currentRole !== 'mahasiswa') return mahasiswaList;
+    if (!isMahasiswaRole(currentRole)) return mahasiswaList;
     const ownStudents = mahasiswaList.filter(isOwnStudent);
     if (ownStudents.length > 0) return ownStudents;
 
@@ -1103,7 +1103,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
 
   // Open Generate Surat Modal (Form berisi: Nama, NIM, Kategori)
   const handleOpenGenerateModal = (targetStudent?: Mahasiswa) => {
-    if (currentRole === 'mahasiswa') {
+    if (isMahasiswaRole(currentRole)) {
       alert('Role Mahasiswa tidak memiliki akses ke fitur Generate Surat.');
       return;
     }
@@ -1253,7 +1253,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
   const handleOpenTambahSurat = (targetMhs?: Mahasiswa | null) => {
     // Tentukan data mahasiswa paten sesuai akun login user atau data detail mahasiswa aktif
     const activeStudent: Mahasiswa =
-      currentRole === 'mahasiswa' && (currentUser || student)
+      isMahasiswaRole(currentRole) && (currentUser || student)
         ? student ||
           mahasiswaList.find(isOwnStudent) ||
           detailMhs ||
@@ -1277,13 +1277,13 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
         : detailMhs || targetMhs || mahasiswaList[0];
 
     const namaVal =
-      currentRole === 'mahasiswa' && currentUser?.nama
+      isMahasiswaRole(currentRole) && currentUser?.nama
         ? currentUser.nama
         : activeStudent
         ? activeStudent.nama
         : '';
     const nimVal =
-      currentRole === 'mahasiswa' && currentUser?.identifier
+      isMahasiswaRole(currentRole) && currentUser?.identifier
         ? currentUser.identifier.replace(/\D/g, '')
         : activeStudent
         ? activeStudent.nim
@@ -1925,7 +1925,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
         </div>
 
         {/* 3. Di bawah judul List Mahasiswa buat button Generate Surat warna hijau dan button List KPRS warna biru */}
-        {currentRole !== 'mahasiswa' && (
+        {!isMahasiswaRole(currentRole) && (
           <div className="flex flex-wrap items-center gap-3 pt-5">
             {/* Button Generate Surat warna hijau */}
             <button
@@ -2114,7 +2114,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
                           <Eye className="w-3.5 h-3.5" />
                           <span>Detail</span>
                         </button>
-                        {currentRole !== 'mahasiswa' && (
+                        {!isMahasiswaRole(currentRole) && (
                           <button
                             type="button"
                             onClick={() => setStudentToDelete(mhs)}
@@ -4621,7 +4621,7 @@ export const PermohonanSuratView: React.FC<PermohonanSuratViewProps> = ({
                                     </button>
 
                                     {/* 5. BUTTON DELETE */}
-                                    {currentRole !== 'mahasiswa' && (
+                                    {!isMahasiswaRole(currentRole) && (
                                       <button
                                         type="button"
                                         onClick={() => setSuratToDelete(srt)}

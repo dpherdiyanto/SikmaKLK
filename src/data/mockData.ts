@@ -593,35 +593,7 @@ export const INITIAL_SURAT: SuratPengajuan[] = [
   }
 ];
 
-export const PENGUMUMAN_LIST: Pengumuman[] = [
-  {
-    id: 'ann-1',
-    judul: 'Pengumuman Jadwal Pendaftaran Ujian Skripsi & Kolokium Periode Oktober 2026',
-    kategori: 'Skripsi',
-    tanggal: '12 September 2026',
-    penulis: 'Subbag Akademik Departemen Kimia FMIPA UB',
-    isi: 'Diberitahukan kepada seluruh mahasiswa S1 Kimia FMIPA Universitas Brawijaya bahwa pendaftaran Ujian Skripsi (Sidang Komprehensif) dan Seminar Hasil untuk periode wisuda semester ganjil dibuka hingga tanggal 30 September 2026 melalui sistem SIKMA Kimia UB.',
-    penting: true
-  },
-  {
-    id: 'ann-2',
-    judul: 'SOP Kalibrasi Instrumen GC-MS & Pengelolaan Limbah Bahan Berbahaya dan Beracun (B3) Laboratorium Kimia',
-    kategori: 'Laboratorium',
-    tanggal: '08 September 2026',
-    penulis: 'Koordinator Laboratorium Kimia FMIPA UB',
-    isi: 'Seluruh mahasiswa yang sedang melaksanakan penelitian diwajibkan mematuhi pemisahan botol limbah B3 (Halogenated vs Non-Halogenated Solvent) dan melengkapi lembar logbook sebelum meninggalkan meja praktikum/riset.',
-    penting: true
-  },
-  {
-    id: 'ann-3',
-    judul: 'Sosialisasi Program MBKM Riset di Badan Riset dan Inovasi Nasional (BRIN) Semester Genap',
-    kategori: 'Akademik',
-    tanggal: '01 September 2026',
-    penulis: 'Ketua Jurusan Kimia FMIPA UB',
-    isi: 'Program magang riset riset berbasis laboratorium BRIN di Cibinong dan Serpong telah dibuka untuk mahasiswa Kimia angkatan 2022 dan 2023. Informasi konversi 20 SKS dapat dikonsultasikan kepada Dosen PA.',
-    penting: false
-  }
-];
+export const PENGUMUMAN_LIST: Pengumuman[] = [];
 
 export const INITIAL_KLK: PengajuanKLK[] = [];
 

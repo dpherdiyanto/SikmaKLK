@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { PLPStaff, UserRole, LabRiset } from '../types/sikma';
+import { PLPStaff, UserRole, LabRiset, isMahasiswaRole } from '../types/sikma';
 import {
   FlaskConical,
   Search,
@@ -56,6 +56,10 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
 
   // Modals state
   const [detailPLP, setDetailPLP] = useState<PLPStaff | null>(null);
+  const activeDetailPLP = useMemo(
+    () => (detailPLP ? plpList.find((p) => p.id === detailPLP.id) ?? detailPLP : null),
+    [detailPLP, plpList]
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingPLP, setEditingPLP] = useState<PLPStaff | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -81,6 +85,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
     gelar: 'A.Md., S.Si.',
     jenjang: 'PLP Ahli Pertama' as PLPStaff['jenjang'],
     labUtama: 'Laboratorium Kimia Analitik & Instrumentasi' as LabRiset,
+    labTambahanInput: '',
     spesialisasiInput: 'Spektrofotometer UV-Vis, AAS, HPLC',
     tupoksiUtama: 'Pemeliharaan dan operasional instrumen laboratorium serta verifikasi bebas tanggungan alat riset mahasiswa.',
     email: '',
@@ -173,41 +178,50 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
       .split(',')
       .map((i) => i.trim())
       .filter((i) => i.length > 0);
+    const labTambahanArray = formData.labTambahanInput
+      .split(',')
+      .map((l) => l.trim())
+      .filter((l) => l.length > 0);
 
     if (editingPLP) {
       const updated: PLPStaff = {
         ...editingPLP,
-        nip: formData.nip || editingPLP.nip || '',
-        nama: formData.nama,
-        gelar: formData.gelar,
+        nip: formData.nip.trim(),
+        nama: formData.nama.trim(),
+        gelar: formData.gelar.trim(),
         jenjang: formData.jenjang,
         jabatan: editingPLP.jenjang !== formData.jenjang ? `Pranata Laboratorium Pendidikan (${formData.jenjang})` : editingPLP.jabatan,
         labUtama: formData.labUtama,
-        spesialisasiInstrumen: instrumenArray.length > 0 ? instrumenArray : editingPLP.spesialisasiInstrumen,
-        tupoksiUtama: formData.tupoksiUtama,
-        email: formData.email,
-        telepon: formData.telepon,
-        ruangLab: formData.ruangLab,
+        labTambahan: labTambahanArray,
+        spesialisasiInstrumen: instrumenArray,
+        tupoksiUtama: formData.tupoksiUtama.trim(),
+        email: formData.email.trim(),
+        telepon: formData.telepon.trim(),
+        ruangLab: formData.ruangLab.trim(),
         status: formData.status,
         verifikatorBebasLab: formData.verifikatorBebasLab
       };
       onUpdatePLP(updated);
+      if (detailPLP && detailPLP.id === updated.id) {
+        setDetailPLP(updated);
+      }
       showFlash('success', `Data PLP ${updated.nama} berhasil diperbarui.`);
       setEditingPLP(null);
     } else {
       const newPLP: PLPStaff = {
         id: `plp-${Date.now()}`,
-        nip: '',
-        nama: formData.nama,
-        gelar: formData.gelar,
+        nip: formData.nip.trim(),
+        nama: formData.nama.trim(),
+        gelar: formData.gelar.trim(),
         jenjang: formData.jenjang,
         labUtama: formData.labUtama,
+        labTambahan: labTambahanArray,
         spesialisasiInstrumen:
           instrumenArray.length > 0 ? instrumenArray : ['Instrumen Analisis Kimia Standar'],
-        tupoksiUtama: formData.tupoksiUtama,
-        email: formData.email || `${formData.nama.toLowerCase().replace(/\s+/g, '.')}@ub.ac.id`,
-        telepon: formData.telepon || '0812-0000-0000',
-        ruangLab: formData.ruangLab,
+        tupoksiUtama: formData.tupoksiUtama.trim(),
+        email: formData.email.trim() || `${formData.nama.toLowerCase().replace(/\s+/g, '.')}@ub.ac.id`,
+        telepon: formData.telepon.trim() || '0812-0000-0000',
+        ruangLab: formData.ruangLab.trim(),
         status: formData.status,
         verifikatorBebasLab: formData.verifikatorBebasLab
       };
@@ -225,7 +239,8 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
       gelar: plp.gelar,
       jenjang: plp.jenjang,
       labUtama: plp.labUtama as LabRiset,
-      spesialisasiInput: plp.spesialisasiInstrumen.join(', '),
+      labTambahanInput: (plp.labTambahan || []).join(', '),
+      spesialisasiInput: (plp.spesialisasiInstrumen || []).join(', '),
       tupoksiUtama: plp.tupoksiUtama,
       email: plp.email,
       telepon: plp.telepon,
@@ -491,7 +506,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                       <div className="font-bold text-slate-900 text-xs">
                         {plp.nama}{plp.gelar ? `, ${plp.gelar}` : ''}
                       </div>
-                      {currentRole !== 'mahasiswa' && (
+                      {!isMahasiswaRole(currentRole) && (
                         <span className="inline-block px-2 py-0.5 bg-blue-100 text-[#002B49] rounded text-[10px] font-bold mt-1">
                           {plp.jenjang}
                         </span>
@@ -503,7 +518,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                         <FlaskConical className="w-3.5 h-3.5 text-[#002B49] shrink-0" />
                         <span className="leading-snug">{plp.labUtama}</span>
                       </div>
-                      {currentRole !== 'mahasiswa' && plp.labTambahan && plp.labTambahan.length > 0 && (
+                      {!isMahasiswaRole(currentRole) && plp.labTambahan && plp.labTambahan.length > 0 && (
                         <div className="text-[10px] text-slate-500 mt-1 pl-4">
                           Tambahan: {plp.labTambahan.join(', ')}
                         </div>
@@ -529,7 +544,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                           <Mail className="w-3 h-3 text-slate-400 shrink-0" />
                           <span className="truncate max-w-[150px]">{plp.email}</span>
                         </div>
-                        {currentRole !== 'mahasiswa' && (
+                        {!isMahasiswaRole(currentRole) && (
                           <>
                             <div className="flex items-center gap-1 text-slate-600">
                               <Phone className="w-3 h-3 text-slate-400 shrink-0" />
@@ -736,7 +751,7 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
       </div>
 
       {/* Modal Detail PLP */}
-      {detailPLP && (
+      {activeDetailPLP && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fadeIn">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-xl border border-slate-200 overflow-hidden">
             <div className="p-4 bg-[#002B49] text-white flex items-center justify-between">
@@ -756,29 +771,38 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
               <div className="flex items-start justify-between pb-3 border-b border-slate-100">
                 <div>
                   <h4 className="text-base font-bold text-slate-900">
-                    {detailPLP.nama}, {detailPLP.gelar}
+                    {activeDetailPLP.nama}{activeDetailPLP.gelar ? `, ${activeDetailPLP.gelar}` : ''}
                   </h4>
-                  {currentRole !== 'mahasiswa' && (
+                  {!isMahasiswaRole(currentRole) && (
+                    <div className="text-xs font-mono text-slate-500 mt-0.5">
+                      NIP. {activeDetailPLP.nip || '-'}
+                    </div>
+                  )}
+                  {!isMahasiswaRole(currentRole) && (
                     <span className="inline-block px-2.5 py-0.5 bg-blue-100 text-[#002B49] rounded-md text-xs font-bold mt-1">
-                      {detailPLP.jenjang}
+                      {activeDetailPLP.jenjang}
                     </span>
                   )}
                 </div>
                 <div className="text-right">
                   <span
                     className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold ${
-                      detailPLP.status === 'Aktif'
+                      activeDetailPLP.status === 'Aktif'
                         ? 'bg-emerald-100 text-emerald-800'
-                        : 'bg-amber-100 text-amber-800'
+                        : activeDetailPLP.status === 'Cuti'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-blue-100 text-blue-800'
                     }`}
                   >
-                    {detailPLP.status}
+                    {activeDetailPLP.status}
                   </span>
-                  {detailPLP.verifikatorBebasLab && (
-                    <div className="text-[10px] text-emerald-700 font-bold mt-1">
-                      ✓ Verifikator Bebas Lab
-                    </div>
-                  )}
+                  <div
+                    className={`text-[10px] font-bold mt-1 ${
+                      activeDetailPLP.verifikatorBebasLab ? 'text-emerald-700' : 'text-slate-400'
+                    }`}
+                  >
+                    {activeDetailPLP.verifikatorBebasLab ? '✓ Verifikator Bebas Lab' : 'Non-Verifikator'}
+                  </div>
                 </div>
               </div>
 
@@ -787,31 +811,36 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                   <div className="text-slate-400 font-medium flex items-center gap-1">
                     <FlaskConical className="w-3.5 h-3.5 text-[#002B49]" /> Laboratorium Utama
                   </div>
-                  <div className="text-slate-800 font-semibold mt-1">{detailPLP.labUtama}</div>
+                  <div className="text-slate-800 font-semibold mt-1">{activeDetailPLP.labUtama || '-'}</div>
+                  {!isMahasiswaRole(currentRole) && activeDetailPLP.labTambahan && activeDetailPLP.labTambahan.length > 0 && (
+                    <div className="text-[11px] text-slate-500 mt-1">
+                      Tambahan: {activeDetailPLP.labTambahan.join(', ')}
+                    </div>
+                  )}
                 </div>
 
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
                     <div className="text-slate-400 font-medium flex items-center gap-1">
                       <Building2 className="w-3.5 h-3.5 text-amber-600" /> Lokasi Ruang Lab
                     </div>
-                    <div className="text-slate-800 font-semibold mt-1">{detailPLP.ruangLab}</div>
+                    <div className="text-slate-800 font-semibold mt-1">{activeDetailPLP.ruangLab || '-'}</div>
                   </div>
                 )}
 
-                <div className={`p-3 bg-slate-50 rounded-lg border border-slate-200/80 ${currentRole === 'mahasiswa' ? 'sm:col-span-2' : ''}`}>
+                <div className={`p-3 bg-slate-50 rounded-lg border border-slate-200/80 ${isMahasiswaRole(currentRole) ? 'sm:col-span-2' : ''}`}>
                   <div className="text-slate-400 font-medium flex items-center gap-1">
                     <Mail className="w-3.5 h-3.5" /> Email Resmi UB
                   </div>
-                  <div className="text-slate-800 font-semibold mt-1">{detailPLP.email}</div>
+                  <div className="text-slate-800 font-semibold mt-1">{activeDetailPLP.email || '-'}</div>
                 </div>
 
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
                     <div className="text-slate-400 font-medium flex items-center gap-1">
                       <Phone className="w-3.5 h-3.5" /> Kontak Telepon / WA
                     </div>
-                    <div className="text-slate-800 font-semibold mt-1">{detailPLP.telepon}</div>
+                    <div className="text-slate-800 font-semibold mt-1">{activeDetailPLP.telepon || '-'}</div>
                   </div>
                 )}
               </div>
@@ -821,16 +850,20 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                   <Wrench className="w-4 h-4 text-[#002B49]" />
                   <span>Keahlian & Spesialisasi Instrumen Laboratorium:</span>
                 </div>
-                <div className="flex flex-wrap gap-1.5 p-3 bg-slate-50 rounded-lg border border-slate-200">
-                  {detailPLP.spesialisasiInstrumen.map((inst, i) => (
-                    <span
-                      key={i}
-                      className="px-2.5 py-1 bg-white rounded-md text-xs font-semibold text-slate-800 border border-slate-200 shadow-2xs"
-                    >
-                      🧪 {inst}
-                    </span>
-                  ))}
-                </div>
+                {activeDetailPLP.spesialisasiInstrumen && activeDetailPLP.spesialisasiInstrumen.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5 p-3 bg-slate-50 rounded-lg border border-slate-200">
+                    {activeDetailPLP.spesialisasiInstrumen.map((inst, i) => (
+                      <span
+                        key={i}
+                        className="px-2.5 py-1 bg-white rounded-md text-xs font-semibold text-slate-800 border border-slate-200 shadow-2xs"
+                      >
+                        🧪 {inst}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-xs text-slate-400 italic p-3 bg-slate-50 rounded-lg border border-slate-200">-</p>
+                )}
               </div>
 
               <div>
@@ -839,15 +872,30 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                   <span>Tugas Pokok & Tanggung Jawab Operasional:</span>
                 </div>
                 <p className="text-xs text-slate-700 bg-slate-50 p-3 rounded-lg border border-slate-200 leading-relaxed">
-                  {detailPLP.tupoksiUtama}
+                  {activeDetailPLP.tupoksiUtama || '-'}
                 </p>
               </div>
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              {canBulkDelete && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeDetailPLP;
+                    setDetailPLP(null);
+                    handleOpenEdit(target);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Data</span>
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => setDetailPLP(null)}
-                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold"
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer"
               >
                 Tutup
               </button>
@@ -909,6 +957,19 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
 
                 <div>
                   <label className="block text-xs font-medium text-slate-700 mb-1">
+                    NIP / Nomor Induk Pegawai
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.nip}
+                    onChange={(e) => setFormData({ ...formData, nip: e.target.value })}
+                    placeholder="Contoh: 199205142018031002"
+                    className="w-full text-xs p-2 font-mono border border-slate-300 rounded-md focus:ring-1 focus:ring-[#002B49]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
                     Jenjang PLP
                   </label>
                   <select
@@ -942,6 +1003,19 @@ export const PlpManagement: React.FC<PlpManagementProps> = ({
                   <option value="Laboratorium Biokimia & Enzim">Laboratorium Biokimia & Enzim</option>
                   <option value="Laboratorium Kimia Lingkungan">Laboratorium Kimia Lingkungan</option>
                 </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1">
+                  Laboratorium Tambahan (Opsional, pisahkan dengan koma)
+                </label>
+                <input
+                  type="text"
+                  value={formData.labTambahanInput}
+                  onChange={(e) => setFormData({ ...formData, labTambahanInput: e.target.value })}
+                  placeholder="Contoh: Laboratorium Kimia Lingkungan"
+                  className="w-full text-xs p-2 border border-slate-300 rounded-md focus:ring-1 focus:ring-[#002B49]"
+                />
               </div>
 
               <div>

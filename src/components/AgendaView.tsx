@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { UserRole, AuthUser, KegiatanAgenda, RuanganAgenda, StatusKegiatanAgenda } from '../types/sikma';
+import { UserRole, AuthUser, KegiatanAgenda, RuanganAgenda, StatusKegiatanAgenda, isMahasiswaRole } from '../types/sikma';
 import {
   Calendar,
   CalendarDays,
@@ -436,7 +436,7 @@ export const isActivityOwnedByUser = (
   // Identitas user yang login (dengan fallback sesuai role Dosen atau Mahasiswa)
   const curName = (
     user?.nama ||
-    (role === 'mahasiswa'
+    (isMahasiswaRole(role)
       ? 'Ahmad Rizky Pratama'
       : role === 'dosen'
       ? 'Akhmad Sabarudin, S.Si., M.Sc., Dr.Sc.'
@@ -445,7 +445,7 @@ export const isActivityOwnedByUser = (
 
   const curNim = (
     user?.identifier ||
-    (role === 'mahasiswa'
+    (isMahasiswaRole(role)
       ? '215090200111012'
       : role === 'dosen'
       ? '197405102000031002'
@@ -454,16 +454,16 @@ export const isActivityOwnedByUser = (
 
   const curUsername = (
     user?.username ||
-    (role === 'mahasiswa' ? 'mahasiswa' : role === 'dosen' ? 'dosen' : '')
+    (isMahasiswaRole(role) ? 'mahasiswa' : role === 'dosen' ? 'dosen' : '')
   ).trim().toLowerCase();
 
-  const curId = user?.id || (role === 'mahasiswa' ? 'user-mhs' : role === 'dosen' ? 'user-dosen' : '');
+  const curId = user?.id || (isMahasiswaRole(role) ? 'user-mhs' : role === 'dosen' ? 'user-dosen' : '');
 
   // 1. Cek kecocokan ID akun / Username
   if (keg.userId && curId && keg.userId === curId) return true;
   if (keg.userId && curUsername && keg.userId.toLowerCase() === curUsername) return true;
   if (role === 'dosen' && keg.userId === 'user-dosen' && (curId === 'user-dosen' || curName.includes('sabarudin'))) return true;
-  if (role === 'mahasiswa' && keg.userId === 'user-mhs' && (curId === 'user-mhs' || curName.includes('ahmad') || curName.includes('rizky'))) return true;
+  if (isMahasiswaRole(role) && keg.userId === 'user-mhs' && (curId === 'user-mhs' || curName.includes('ahmad') || curName.includes('rizky'))) return true;
 
   // 2. Cek userNama
   if (keg.userNama && curName) {
@@ -798,7 +798,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
     setFormJumlahPeserta(10);
     setFormPenanggungJawab(
       effectiveUser?.nama ||
-        (currentRole === 'mahasiswa'
+        (isMahasiswaRole(currentRole)
           ? 'Ahmad Rizky Pratama'
           : currentRole === 'dosen'
           ? 'Akhmad Sabarudin, S.Si., M.Sc., Dr.Sc.'
@@ -816,7 +816,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
     if (!canEditKegiatan(kegiatan)) {
       const studentName = effectiveUser?.nama || 'Ahmad Rizky Pratama';
       showToast(
-        currentRole === 'mahasiswa'
+        isMahasiswaRole(currentRole)
           ? `Akses ditolak: Anda hanya dapat mengedit aktivitas Anda sendiri (${studentName}). Jadwal ini dipesan oleh pengguna lain.`
           : 'Akses ditolak: Jadwal hari, waktu, dan ruangan ini dipesan oleh pengguna lain dan tidak dapat diedit.'
       );
@@ -846,7 +846,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
     if (editingKegiatan && !canEditKegiatan(editingKegiatan)) {
       const studentName = effectiveUser?.nama || 'Ahmad Rizky Pratama';
       setFormError(
-        currentRole === 'mahasiswa'
+        isMahasiswaRole(currentRole)
           ? `Akses ditolak: Anda hanya dapat mengedit aktivitas milik Anda sendiri (${studentName}).`
           : 'Akses ditolak: Anda tidak memiliki izin untuk mengedit kegiatan yang dipesan oleh pengguna lain.'
       );
@@ -913,7 +913,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
                 userId:
                   k.userId ||
                   effectiveUser?.id ||
-                  (currentRole === 'mahasiswa' ? 'user-mhs' : currentRole === 'dosen' ? 'user-dosen' : undefined),
+                  (isMahasiswaRole(currentRole) ? 'user-mhs' : currentRole === 'dosen' ? 'user-dosen' : undefined),
                 userNama: k.userNama || effectiveUser?.nama || formPenanggungJawab.trim()
               }
             : k
@@ -938,7 +938,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
         createdAt: new Date().toISOString(),
         userId:
           effectiveUser?.id ||
-          (currentRole === 'mahasiswa' ? 'user-mhs' : currentRole === 'dosen' ? 'user-dosen' : undefined),
+          (isMahasiswaRole(currentRole) ? 'user-mhs' : currentRole === 'dosen' ? 'user-dosen' : undefined),
         userNama: effectiveUser?.nama || formPenanggungJawab.trim()
       };
 
@@ -1242,17 +1242,17 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
                         }}
                         className={`text-[10px] font-semibold p-1 rounded border leading-tight truncate flex items-center justify-between cursor-pointer hover:brightness-95 transition-all ${roomColor.badge}`}
                         title={`${keg.jamMulai} - ${keg.jamSelesai}: ${keg.namaKegiatan} (${keg.ruangan})${
-                          !isOwner && currentRole === 'mahasiswa' ? ' • Dipesan pengguna lain (Hanya Lihat)' : ''
+                          !isOwner && isMahasiswaRole(currentRole) ? ' • Dipesan pengguna lain (Hanya Lihat)' : ''
                         }`}
                       >
                         <div className="truncate flex items-center gap-1">
                           <span className="font-mono text-[9px]">{keg.jamMulai}</span>
                           <span className="truncate">{keg.namaKegiatan}</span>
                         </div>
-                        {isOwner && currentRole === 'mahasiswa' && (
+                        {isOwner && isMahasiswaRole(currentRole) && (
                           <UserCheck className="w-2.5 h-2.5 text-emerald-700 shrink-0 ml-1" title="Aktivitas Anda (Dapat Diedit)" />
                         )}
-                        {!isOwner && currentRole === 'mahasiswa' && (
+                        {!isOwner && isMahasiswaRole(currentRole) && (
                           <Lock className="w-2.5 h-2.5 text-amber-700 shrink-0 ml-1" title="Dipesan oleh pengguna lain (Terkunci)" />
                         )}
                       </div>
@@ -2072,7 +2072,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
                                             {matchingKegiatan.namaKegiatan}
                                           </h4>
                                           <div className="flex items-center gap-1 shrink-0">
-                                            {isOwner && currentRole === 'mahasiswa' && (
+                                            {isOwner && isMahasiswaRole(currentRole) && (
                                               <span
                                                 className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-900 border border-emerald-300 text-[9px] font-bold"
                                                 title="Aktivitas Anda (Dapat Diedit)"
@@ -2081,7 +2081,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
                                                 <span>Aktivitas Anda</span>
                                               </span>
                                             )}
-                                            {!isOwner && currentRole === 'mahasiswa' && (
+                                            {!isOwner && isMahasiswaRole(currentRole) && (
                                               <span
                                                 className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-200/90 text-amber-900 border border-amber-300 text-[9px] font-bold"
                                                 title="Dipesan oleh pengguna lain (Terkunci)"
@@ -2141,10 +2141,10 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
                                     >
                                       <div className="border-l-2 border-dashed border-blue-400 pl-1.5 text-[10px] text-slate-500 truncate italic flex items-center justify-between">
                                         <span className="truncate">↳ {matchingKegiatan.namaKegiatan} ({matchingKegiatan.jamMulai} - {matchingKegiatan.jamSelesai})</span>
-                                        {isOwner && currentRole === 'mahasiswa' && (
+                                        {isOwner && isMahasiswaRole(currentRole) && (
                                           <UserCheck className="w-2.5 h-2.5 text-emerald-700 shrink-0 ml-1" title="Aktivitas Anda (Dapat Diedit)" />
                                         )}
-                                        {!isOwner && currentRole === 'mahasiswa' && (
+                                        {!isOwner && isMahasiswaRole(currentRole) && (
                                           <Lock className="w-2.5 h-2.5 text-amber-700 shrink-0 ml-1" title="Dipesan oleh pengguna lain (Terkunci)" />
                                         )}
                                       </div>
@@ -2215,7 +2215,7 @@ export const AgendaView: React.FC<AgendaViewProps> = ({ currentRole, currentUser
 
             <div className="p-5 space-y-3.5 text-xs">
               {/* Banner Status Akses Edit untuk Mahasiswa */}
-              {canEditKegiatan(selectedDetailKegiatan) && currentRole === 'mahasiswa' && (
+              {canEditKegiatan(selectedDetailKegiatan) && isMahasiswaRole(currentRole) && (
                 <div className="p-3 bg-emerald-50 border border-emerald-300 rounded-xl text-emerald-950 text-xs flex items-start gap-2.5 font-medium shadow-2xs">
                   <UserCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
                   <div>

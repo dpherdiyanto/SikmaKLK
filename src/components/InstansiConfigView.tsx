@@ -21,7 +21,7 @@ import {
   AlertTriangle,
   ShieldAlert
 } from 'lucide-react';
-import { InstansiItem, UserRole } from '../types/sikma';
+import { InstansiItem, UserRole, isMahasiswaRole } from '../types/sikma';
 import { DAFTAR_PROVINSI_INDONESIA, INITIAL_INSTANSI_LIST } from '../data/instansiList';
 
 interface InstansiConfigViewProps {
@@ -29,7 +29,7 @@ interface InstansiConfigViewProps {
 }
 
 export const InstansiConfigView: React.FC<InstansiConfigViewProps> = ({ currentRole }) => {
-  if (currentRole === 'mahasiswa') {
+  if (isMahasiswaRole(currentRole)) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center max-w-xl mx-auto shadow-sm my-8">
         <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">

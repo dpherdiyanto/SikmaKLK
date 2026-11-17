@@ -28,11 +28,36 @@ import {
   RuanganItem,
   AuthUser,
   BerkasChecklistItem,
-  ItemRiwayatKLK
+  ItemRiwayatKLK,
+  RiwayatVersiFormKLK,
+  isMahasiswaRole
 } from '../types/sikma';
 import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import { INITIAL_RUANGAN_LIST } from '../data/ruanganList';
 import { DOKUMEN_KLK_STANDARD_LIST } from '../data/mockData';
+import {
+  SuratPengantarKlkData,
+  buildDefaultSuratPengantarData,
+  getSuratPengantarDataForKlk,
+  saveCustomSuratPengantarForKlk,
+  resetCustomSuratPengantarForKlk,
+  countAttachedBerkasForKlk,
+  formatJumlahBerkasLampiran,
+  generateSuratPengantarQrDataUrl,
+  downloadSuratPengantarPerusahaanPdf,
+  printSuratPengantarPerusahaan,
+  resolveDosenPAForKlk
+} from '../utils/suratPengantarKlkHelpers';
+import {
+  saveSuratBalasanFile,
+  getSuratBalasanFile,
+  clearSuratBalasanFile,
+  downloadSuratBalasanMitra,
+  printSuratBalasanMitra,
+  isImageFile,
+  isPdfFile
+} from '../utils/suratBalasanMitraHelpers';
+import { PdfCanvasViewer } from './PdfCanvasViewer';
 import {
   Briefcase,
   Building2,
@@ -471,6 +496,58 @@ export const checkAllSerialConflicts = (
   return conflicts;
 };
 
+export const checkCanSelectMkKonversi = (
+  targetMk: string,
+  selectedList: string[]
+): {
+  canSelect: boolean;
+  reason?: 'serial' | 'exceed_16' | 'unreachable_target';
+  conflictWith?: string;
+  projectedTotalSks: number;
+  message?: string;
+} => {
+  const currentTotalSks = selectedList.reduce((sum, item) => sum + extractSksFromMkKonversi(item), 0);
+  const targetInfo = parseMkKonversiString(targetMk);
+  const projectedTotalSks = currentTotalSks + targetInfo.sks;
+
+  const conflictWith = getSerialConflictWith(targetMk, selectedList);
+  if (conflictWith) {
+    const conflictInfo = parseMkKonversiString(conflictWith);
+    return {
+      canSelect: false,
+      reason: 'serial',
+      conflictWith,
+      projectedTotalSks,
+      message: `Mata kuliah "${targetInfo.nama}" tidak dapat dipilih bersamaan dengan "${conflictInfo.nama}". Sesuai ketentuan kurikulum KLK, mata kuliah berseri/berurutan (seperti Seri I dan Seri II) tidak boleh diambil berpasangan dalam satu usulan KLK.`
+    };
+  }
+
+  if (projectedTotalSks > 16) {
+    return {
+      canSelect: false,
+      reason: 'exceed_16',
+      projectedTotalSks,
+      message: `Tidak dapat memilih "${targetInfo.nama}" (${targetInfo.sks} SKS). Total beban SKS saat ini adalah ${currentTotalSks} SKS. Jika ditambahkan, totalnya menjadi ${projectedTotalSks} SKS (melebihi batas maksimal kombinasi 16 SKS). Pilihan mata kuliah konversi hanya boleh memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS.`
+    };
+  }
+
+  const candidateList = [...selectedList, targetMk];
+  const hasOneSksCourse = candidateList.some((item) => extractSksFromMkKonversi(item) === 1);
+  if (projectedTotalSks === 15 && hasOneSksCourse) {
+    return {
+      canSelect: false,
+      reason: 'unreachable_target',
+      projectedTotalSks,
+      message: `Tidak dapat memilih "${targetInfo.nama}" (${targetInfo.sks} SKS) karena akan menghasilkan total 15 SKS sementara mata kuliah 1 SKS sudah terpilih, sehingga tidak mungkin mencapai target kombinasi 16 SKS. Pilihan mata kuliah konversi hanya boleh memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS.`
+    };
+  }
+
+  return {
+    canSelect: true,
+    projectedTotalSks
+  };
+};
+
 export interface ItemAlurKLK {
   no: number;
   deskripsi: string;
@@ -662,8 +739,8 @@ export const KRITERIA_VERIFIKASI_DOSEN: KriteriaVerifikasiDosenConfig[] = [
   },
   {
     id: 'crit_relevansi_bidang',
-    label: 'Relevansi Bidang Kerja & Kelayakan Fasilitas Laboratorium Mitra',
-    deskripsi: 'Instansi mitra memiliki sarana/instrumen analisis kimia yang memadai dan mentor pembimbing teknis.'
+    label: 'Relevansi Topik Magang dengan MK Konversi',
+    deskripsi: 'Topik magang memenuhi capaian pembelajaran mata kuliah konversi.'
   },
   {
     id: 'crit_ekuivalensi_sks',
@@ -767,6 +844,88 @@ export const checkIsDosenKLKDitetapkanAdmin = (
   return false;
 };
 
+// Helper ketat khusus Logbook Mingguan: HANYA Dosen Pembimbing KLK yang ditetapkan Admin (bukan DPA atau dosen lain)
+export const checkIsDosenPembimbingKlkOnly = (
+  user: AuthUser | null | undefined,
+  klkItem: PengajuanKLK | null | undefined,
+  dosenList: Dosen[] = []
+): boolean => {
+  if (!user || !klkItem) return false;
+
+  const roleStr = String(user.role || '').toLowerCase();
+  const isDosenUser =
+    roleStr === 'dosen' ||
+    Boolean(user.jabatan && user.jabatan.toLowerCase().includes('dosen'));
+  if (!isDosenUser) return false;
+
+  const isDosenKLKDitetapkan = checkIsDosenKLKDitetapkanAdmin(klkItem);
+  const assignedName = (klkItem.dosenPembimbingKLK || '').trim();
+  if (!isDosenKLKDitetapkan || !assignedName || assignedName.includes('Belum Ditetapkan')) {
+    return false;
+  }
+
+  const normalizeName = (s: string) =>
+    s
+      .toLowerCase()
+      .replace(/prof\.|dr\.|dra\.|ir\.|s\.si\.|m\.si\.|m\.sc\.|ph\.d\.|s\.tp\.|m\.eng\.|sc\.|m\.s\.|s\.t\.|m\.t\.|s\.pd\.|m\.pd\./gi, ' ')
+      .replace(/[^a-z0-9\s]/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const assignedClean = normalizeName(assignedName);
+  const userNamaRaw = (user.nama || (user as any).name || '').trim();
+  const userClean = normalizeName(userNamaRaw);
+  const userUsernameClean = (user.username || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+  const userIdClean = (user.identifier || '').replace(/\D/g, '');
+  const userEmailClean = (user.email || '').toLowerCase().trim();
+
+  // 1. Cocokkan terhadap data master Dosen berdasarkan nama Dosen Pembimbing KLK
+  const matchedMasterDosen = dosenList.find((d) => {
+    const dClean = normalizeName(d.nama || '');
+    return (
+      (dClean && assignedClean && dClean === assignedClean) ||
+      (d.nama && d.nama.trim().toLowerCase() === assignedName.toLowerCase())
+    );
+  });
+  if (matchedMasterDosen) {
+    if (user.id && matchedMasterDosen.id && user.id === matchedMasterDosen.id) return true;
+    const dNipClean = (matchedMasterDosen.nip || '').replace(/\D/g, '');
+    if (userIdClean && dNipClean && userIdClean === dNipClean) return true;
+    const dEmailClean = (matchedMasterDosen.email || '').toLowerCase().trim();
+    if (userEmailClean && dEmailClean && userEmailClean === dEmailClean) return true;
+  }
+
+  // 2. Cocokkan nama lengkap / panggilan tanpa gelar (seluruh token harus cocok utuh)
+  if (userClean && assignedClean) {
+    if (userClean === assignedClean) return true;
+    const userTokens = userClean.split(/\s+/).filter((t) => t.length >= 2);
+    const assignedTokens = assignedClean.split(/\s+/).filter((t) => t.length >= 2);
+    if (
+      userTokens.length > 0 &&
+      assignedTokens.length > 0 &&
+      (userTokens.every((t) => assignedTokens.includes(t)) ||
+        assignedTokens.every((t) => userTokens.includes(t)))
+    ) {
+      return true;
+    }
+  }
+
+  // 3. Cocokkan username terhadap token nama Dosen Pembimbing KLK
+  if (userUsernameClean && assignedClean) {
+    const assignedNoSpace = assignedClean.replace(/\s+/g, '');
+    const assignedTokens = assignedClean.split(/\s+/).filter((t) => t.length >= 3);
+    if (
+      userUsernameClean === assignedNoSpace ||
+      (userUsernameClean.length >= 4 && assignedNoSpace.includes(userUsernameClean)) ||
+      assignedTokens.some((t) => t === userUsernameClean)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+};
+
 export const checkIsDosenPAForStudent = (
   user: AuthUser | null | undefined,
   klkItem: PengajuanKLK | null | undefined,
@@ -850,52 +1009,27 @@ export const checkIsDosenPAForStudent = (
 
 export const checkIsMentorForStudent = (
   user: AuthUser | null | undefined,
-  klkItem: PengajuanKLK | null | undefined
+  klkItem: PengajuanKLK | null | undefined,
+  currentRole?: string
 ): boolean => {
-  if (!user || !klkItem) return false;
-  // Super Admin berwenang memantau & melakukan supervisi pada seluruh usulan
-  if (user.role === 'super_admin' || (user.role as any) === 'superadmin') {
-    return true;
+  if (!user && !currentRole) return false;
+
+  const roleToCheck = (currentRole || user?.role || '') as string;
+  const isEksternalRole =
+    roleToCheck === 'eksternal' ||
+    (user?.role === 'eksternal' && !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(roleToCheck)) ||
+    ((user?.role as any) === 'pembimbing_lapangan' && !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(roleToCheck)) ||
+    ((user?.role as any) === 'mentor' && !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(roleToCheck)) ||
+    ((user?.role as any) === 'pembimbing_industri' && !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(roleToCheck));
+
+  // HANYA user eksternal (pembimbing lapangan) yang berhak melakukan checklist
+  if (!isEksternalRole) {
+    return false;
   }
 
-  const isMentorRole =
-    (user.role as any) === 'pembimbing_lapangan' ||
-    (user.role as any) === 'mentor' ||
-    (user.role as any) === 'pembimbing_industri';
-
-  const klkMentorNama = (klkItem.mentorIndustri || '').toLowerCase().trim();
-  const klkMentorEmail = (klkItem.emailMentor || klkItem.kontakMentor || '').toLowerCase().trim();
-
-  const userName = (user.nama || (user as any).name || '').toLowerCase().trim();
-  const userEmail = (user.email || '').toLowerCase().trim();
-  const userUsername = (user.username || '').toLowerCase().trim();
-
-  // Match email
-  if (userEmail && klkMentorEmail && (userEmail === klkMentorEmail || klkMentorEmail.includes(userEmail))) return true;
-
-  // Match name
-  if (userName && klkMentorNama) {
-    const norm = (s: string) => s.replace(/[^a-z0-9]/g, '');
-    const uClean = norm(userName);
-    const mClean = norm(klkMentorNama);
-    if (uClean && mClean && (uClean === mClean || mClean.includes(uClean) || uClean.includes(mClean))) return true;
-  }
-
-  // Match username
-  if (userUsername && klkMentorNama) {
-    const norm = (s: string) => s.replace(/[^a-z0-9]/g, '');
-    const uClean = norm(userUsername);
-    const mClean = norm(klkMentorNama);
-    if (uClean && mClean && (uClean === mClean || mClean.includes(uClean) || uClean.includes(mClean))) return true;
-  }
-
-  // If role is pembimbing_lapangan / mentor, grant authorization for mentor workspace
-  if (isMentorRole) {
-    return true;
-  }
-
-  return false;
+  return true;
 };
+
 
 export const formatTanggalJamWib = (dateInput?: Date | string | number): string => {
   const d = dateInput ? new Date(dateInput) : new Date();
@@ -1315,8 +1449,7 @@ export const RiwayatAktivitasBox: React.FC<{
   const isStep3Done =
     klk.status === 'Disetujui' ||
     klk.status === 'Disetujui / Sedang Berjalan' ||
-    klk.status === 'Selesai & Dinilai' ||
-    !!klk.nomorSuratTugas;
+    klk.status === 'Selesai & Dinilai';
   const isStep3Tolak = klk.status === 'Ditolak' && !isStep2Tolak;
 
   const isStep4Done = !!klk.suratLamaranDikirim;
@@ -1352,10 +1485,10 @@ export const RiwayatAktivitasBox: React.FC<{
     currentStepDesc = 'Surat pengantar telah dikirim ke mitra. Menunggu konfirmasi jawaban dari pihak instansi mitra.';
   } else if (isStep3Done) {
     currentActiveStep = 4;
-    currentStepDesc = 'Surat Pengantar & Surat Tugas resmi diterbitkan Admin TU. Mahasiswa segera mengirimkan surat ke instansi mitra.';
+    currentStepDesc = 'Pengajuan lolos verifikasi Admin TU & Surat Pengantar resmi diterbitkan. Mahasiswa segera mengirimkan surat ke instansi mitra.';
   } else if (isStep2Done) {
     currentActiveStep = 3;
-    currentStepDesc = 'Dosen PA telah menyetujui usulan. Menunggu Admin TU memvalidasi berkas dan menerbitkan Surat Tugas resmi.';
+    currentStepDesc = 'Dosen PA telah menyetujui usulan. Menunggu Admin TU memvalidasi berkas dan menerbitkan Surat Pengantar resmi.';
   } else if (isStep2Revisi) {
     currentActiveStep = 2;
     currentStepDesc = 'Dosen PA meminta perbaikan usulan. Mahasiswa harap memperbarui data formulir pendaftaran.';
@@ -1971,30 +2104,171 @@ export const RiwayatAktivitasBox: React.FC<{
   );
 };
 
+export interface KlkWorkflow8StageStatus {
+  currentStage: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+  isCompletedAll: boolean;
+  shortStatusLabel: string;
+  headline: string;
+  description: string;
+}
+
+export const getKlkWorkflow8StageStatus = (
+  klk: PengajuanKLK | null | undefined,
+  forceStage1IfRejected: boolean = false
+): KlkWorkflow8StageStatus => {
+  if (!klk) {
+    return {
+      currentStage: 1,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 1: Pengisian Form Usulan',
+      headline: 'Pengisian Formulir Usulan KLK',
+      description: 'Mahasiswa mengisi formulir online, memilih usulan MK konversi, dan mengunggah berkas persyaratan.'
+    };
+  }
+
+  const isRevisiOrTolak =
+    klk.statusResponMitra === 'Ditolak' ||
+    klk.statusVerifikasiDosen === 'Perlu Revisi' ||
+    klk.statusVerifikasiDosen === 'Ditolak' ||
+    klk.status === 'Ditolak';
+
+  if (forceStage1IfRejected && isRevisiOrTolak) {
+    return {
+      currentStage: 1,
+      isCompletedAll: false,
+      shortStatusLabel:
+        klk.statusResponMitra === 'Ditolak'
+          ? 'Tahap 1: Ulang Form (Ditolak Mitra)'
+          : klk.statusVerifikasiDosen === 'Perlu Revisi'
+          ? 'Tahap 1: Revisi Usulan KLK'
+          : 'Tahap 1: Pengajuan Ulang Form KLK',
+      headline:
+        klk.statusResponMitra === 'Ditolak'
+          ? 'Permohonan Ditolak Mitra — Ajukan Ulang dari Awal'
+          : 'Perbaikan / Pengajuan Ulang Formulir KLK',
+      description:
+        klk.statusResponMitra === 'Ditolak'
+          ? 'Permohonan pada instansi mitra sebelumnya ditolak. Silakan isi formulir pengajuan KLK baru dari awal.'
+          : 'Silakan perbarui data formulir pengajuan KLK Anda sesuai catatan evaluasi lalu kirimkan ulang.'
+    };
+  }
+
+  if (klk.status === 'Selesai & Dinilai') {
+    return {
+      currentStage: 8,
+      isCompletedAll: true,
+      shortStatusLabel: 'Tahap 8: Selesai & Dinilai',
+      headline: 'Seluruh 8 Tahap KLK Selesai & Nilai Akhir Terbit',
+      description: 'Kegiatan KLK, logbook mingguan, bimbingan dosen, seminar, dan penilaian akhir telah tuntas.'
+    };
+  }
+
+  const isApprovedAdmin =
+    klk.status === 'Disetujui' ||
+    klk.status === 'Disetujui / Sedang Berjalan';
+
+  const isApprovedDosen =
+    klk.statusVerifikasiDosen === 'Disetujui Dosen' ||
+    isApprovedAdmin;
+
+  if (klk.suratMitraDisetujuiDosen) {
+    return {
+      currentStage: 8,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 8: Pelaksanaan & Bimbingan Aktif',
+      headline: 'Pelaksanaan KLK, Logbook & Bimbingan Aktif',
+      description: 'Berkas disetujui Dosen Pembimbing KLK. Silakan isi Logbook Mingguan, Presensi Harian, dan Bimbingan Dosen minimal 6 sesi.'
+    };
+  }
+
+  if (klk.suratBalasanTerkirimKeDosen || klk.dokumenSuratBalasanMitra) {
+    return {
+      currentStage: 7,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 7: Approval Berkas Dosen (Logbook Aktif)',
+      headline: 'Menunggu Persetujuan Berkas Dosen (Logbook & Bimbingan Terbuka)',
+      description: 'Surat penerimaan perusahaan telah dikirimkan ke Dosen Pembimbing KLK. Akses Logbook & Bimbingan sudah terbuka dan menunggu konfirmasi akhir berkas.'
+    };
+  }
+
+  if (klk.statusResponMitra === 'Diterima') {
+    return {
+      currentStage: 6,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 6: Unggah Surat Perusahaan',
+      headline: 'Diterima Mitra — Segera Unggah Surat Perusahaan ke Dosen Pembimbing',
+      description: 'Anda telah mengonfirmasi diterima di mitra. Unggah surat penerimaan perusahaan ke Dosen Pembimbing KLK untuk membuka Logbook & Bimbingan.'
+    };
+  }
+
+  if (klk.suratLamaranDikirim) {
+    return {
+      currentStage: 5,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 5: Konfirmasi Jawaban Mitra',
+      headline: 'Menunggu & Konfirmasi Hasil dari Perusahaan / Mitra',
+      description: 'Surat pengantar telah dikirim ke mitra. Pilih hasil konfirmasi Diterima atau Ditolak dari instansi mitra.'
+    };
+  }
+
+  if (isApprovedAdmin) {
+    return {
+      currentStage: 4,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 4: Kirim Surat ke Mitra',
+      headline: 'Lolos Admin & SK Tugas — Surat Pengantar ke Mitra Diterbitkan',
+      description: 'Pengajuan KLK disetujui Admin TU. Lihat/unduh Surat Pengantar ke mitra dan klik konfirmasi pengiriman surat.'
+    };
+  }
+
+  if (isApprovedDosen) {
+    return {
+      currentStage: 3,
+      isCompletedAll: false,
+      shortStatusLabel: 'Tahap 3: Verifikasi Admin TU & SK',
+      headline: 'Lolos Verifikasi DPA — Menunggu Persetujuan Admin TU',
+      description: 'Dosen PA telah menyetujui usulan & konversi SKS. Berkas sedang diverifikasi Admin TU untuk penerbitan Surat Pengantar & SK.'
+    };
+  }
+
+  return {
+    currentStage: 2,
+    isCompletedAll: false,
+    shortStatusLabel: 'Tahap 2: Evaluasi & Verifikasi DPA',
+    headline: 'Menunggu Evaluasi & Persetujuan Dosen PA',
+    description: 'Formulir pengajuan telah dikirim dan sedang dievaluasi kesesuaian CPL serta konversi SKS oleh Dosen Pembimbing Akademik.'
+  };
+};
+
 export const WorkflowUrutanKlkTracker: React.FC<{
   activeStep: number;
+  selectedStepOverride?: number;
   onNavigate?: (tab: KlkSubTab) => void;
   onStepClick?: (step: number) => void;
   canAccessDosen?: boolean;
   canAccessAdmin?: boolean;
+  canAccessForm?: boolean;
   isCompletedAll?: boolean;
   onOpenModalAlur?: () => void;
 }> = ({
   activeStep,
+  selectedStepOverride,
   onNavigate,
   onStepClick,
   canAccessDosen = true,
   canAccessAdmin = true,
+  canAccessForm = true,
   isCompletedAll = false,
   onOpenModalAlur
 }) => {
-  const [selectedStep, setSelectedStep] = useState<number>(activeStep || 1);
+  const [selectedStep, setSelectedStep] = useState<number>(selectedStepOverride || activeStep || 1);
 
   useEffect(() => {
-    if (activeStep) {
-      setSelectedStep(activeStep);
+    const nextStep = selectedStepOverride || activeStep;
+    if (nextStep) {
+      setSelectedStep(nextStep);
     }
-  }, [activeStep]);
+  }, [activeStep, selectedStepOverride]);
 
   const stepIcons = [
     PlusCircle,
@@ -2052,9 +2326,7 @@ export const WorkflowUrutanKlkTracker: React.FC<{
               <span>Buka Alur 8 Tahap KLK</span>
             </button>
           )}
-          <span className="text-[10px] font-bold px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-slate-700 shadow-2xs">
-            Sinkron Realtime SIKMA
-          </span>
+
         </div>
       </div>
 
@@ -2067,7 +2339,7 @@ export const WorkflowUrutanKlkTracker: React.FC<{
           const IconComp = stepIcons[(st.step - 1) % stepIcons.length];
 
           let tabKey: KlkSubTab = 'form-baru';
-          let allowed = true;
+          let allowed = canAccessForm;
 
           if (st.step === 2) {
             tabKey = 'verifikasi-pengajuan-dosen';
@@ -2077,6 +2349,7 @@ export const WorkflowUrutanKlkTracker: React.FC<{
             allowed = canAccessAdmin;
           } else if (st.step >= 8) {
             tabKey = 'logbook-mingguan';
+            allowed = true;
           }
 
           return (
@@ -2085,7 +2358,7 @@ export const WorkflowUrutanKlkTracker: React.FC<{
               id={`tracker-step-card-${st.step}`}
               onClick={() => {
                 setSelectedStep(st.step);
-                if (st.step <= 3 && onStepClick) {
+                if (onStepClick) {
                   onStepClick(st.step);
                 }
                 if (allowed && onNavigate && (st.step <= 3 || st.step === 8)) {
@@ -2180,7 +2453,10 @@ export const WorkflowUrutanKlkTracker: React.FC<{
           {selectedStep !== activeStep && (
             <button
               type="button"
-              onClick={() => setSelectedStep(activeStep)}
+              onClick={() => {
+                setSelectedStep(activeStep);
+                if (onStepClick) onStepClick(activeStep);
+              }}
               className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 border border-slate-200"
               title="Kembali ke posisi alur saat ini"
             >
@@ -2188,10 +2464,13 @@ export const WorkflowUrutanKlkTracker: React.FC<{
             </button>
           )}
 
-          {selectedStep === 1 && (
+          {selectedStep === 1 && canAccessForm && (
             <button
               type="button"
-              onClick={() => onNavigate && onNavigate('form-baru')}
+              onClick={() => {
+                if (onStepClick) onStepClick(1);
+                if (onNavigate) onNavigate('form-baru');
+              }}
               className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 border border-[#D4AF37]/30"
             >
               <span>Lihat Form Usulan</span>
@@ -2218,6 +2497,19 @@ export const WorkflowUrutanKlkTracker: React.FC<{
               <ArrowRight className="w-3.5 h-3.5" />
             </button>
           )}
+          {selectedStep >= 4 && selectedStep <= 7 && canAccessForm && (
+            <button
+              type="button"
+              onClick={() => {
+                if (onStepClick) onStepClick(selectedStep);
+                if (onNavigate) onNavigate('form-baru');
+              }}
+              className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition-all shadow-xs cursor-pointer flex items-center gap-1 border border-[#D4AF37]/30"
+            >
+              <span>Lihat Update Tahap {selectedStep}</span>
+              <ArrowRight className="w-3.5 h-3.5 text-[#D4AF37]" />
+            </button>
+          )}
           {selectedStep >= 8 && (
             <button
               type="button"
@@ -2238,6 +2530,7 @@ export const RingkasanDataFormKlkCard: React.FC<{
   klk: PengajuanKLK;
   dosenPANama?: string;
   stepContext: 1 | 2 | 3;
+  currentWorkflowStep?: number;
   onPreviewDoc: (doc: {
     label: string;
     fileName: string;
@@ -2246,21 +2539,26 @@ export const RingkasanDataFormKlkCard: React.FC<{
     fileSize: string;
     category: string;
   }) => void;
-  onNavigateStep?: (step: 1 | 2 | 3) => void;
+  onNavigateStep?: (step: number) => void;
   canAccessDosen?: boolean;
   canAccessAdmin?: boolean;
   onOpenDosenTab?: () => void;
   onOpenAdminTab?: () => void;
+  onOpenSuratPengantar?: (klk: PengajuanKLK) => void;
+  onDownloadSuratPengantarPdf?: (klk: PengajuanKLK) => void;
 }> = ({
   klk,
   dosenPANama = 'Dr. Dra. Hermin Sulistyarti, M.Si.',
   stepContext,
+  currentWorkflowStep,
   onPreviewDoc,
   onNavigateStep,
   canAccessDosen = false,
   canAccessAdmin = false,
   onOpenDosenTab,
-  onOpenAdminTab
+  onOpenAdminTab,
+  onOpenSuratPengantar,
+  onDownloadSuratPengantarPdf
 }) => {
   const isApprovedAdmin =
     klk.status === 'Disetujui' ||
@@ -2362,6 +2660,17 @@ export const RingkasanDataFormKlkCard: React.FC<{
         </div>
 
         <div className="flex items-center gap-2 flex-wrap shrink-0 self-start md:self-auto">
+          {onNavigateStep && currentWorkflowStep && currentWorkflowStep >= 4 && (
+            <button
+              type="button"
+              onClick={() => onNavigateStep(currentWorkflowStep)}
+              className="px-3.5 py-2 bg-[#D4AF37] hover:bg-[#e0be48] text-[#002B49] rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+            >
+              <span>Kembali ke Update Terkini (Tahap {currentWorkflowStep})</span>
+              <ArrowRight className="w-3.5 h-3.5 text-[#002B49]" />
+            </button>
+          )}
+
           {onNavigateStep && stepContext === 2 && (
             <>
               <button
@@ -2393,14 +2702,16 @@ export const RingkasanDataFormKlkCard: React.FC<{
                 <ArrowLeft className="w-3.5 h-3.5 text-[#D4AF37]" />
                 <span>Lihat Tahap 2</span>
               </button>
-              <button
-                type="button"
-                onClick={() => onNavigateStep(1)}
-                className="px-3.5 py-2 bg-[#D4AF37] hover:bg-[#e0be48] text-[#002B49] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
-              >
-                <span>Ke Tahap 1</span>
-                <ArrowRight className="w-3.5 h-3.5 text-[#002B49]" />
-              </button>
+              {(!currentWorkflowStep || currentWorkflowStep < 4) && (
+                <button
+                  type="button"
+                  onClick={() => onNavigateStep(1)}
+                  className="px-3.5 py-2 bg-[#D4AF37] hover:bg-[#e0be48] text-[#002B49] rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs"
+                >
+                  <span>Ke Tahap 1</span>
+                  <ArrowRight className="w-3.5 h-3.5 text-[#002B49]" />
+                </button>
+              )}
             </>
           )}
 
@@ -2430,7 +2741,7 @@ export const RingkasanDataFormKlkCard: React.FC<{
             {isApprovedAdmin ? (
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                <span>Disetujui (Surat Tugas Terbit)</span>
+                <span>{getKlkWorkflow8StageStatus(klk).shortStatusLabel}</span>
               </span>
             ) : isApprovedDosen ? (
               <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
@@ -2572,19 +2883,23 @@ export const RingkasanDataFormKlkCard: React.FC<{
                     <button
                       type="button"
                       onClick={() => {
-                        onPreviewDoc({
-                          label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
-                          fileName: `Surat_Pengantar_Resmi_${klk.nim}.pdf`,
-                          description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${klk.mahasiswaNama} (${klk.nim}) ditujukan kepada Pimpinan Mitra ${klk.namaMitra}.`,
-                          uploadedAt: klk.waktuSubmit || '14 Feb 2026',
-                          fileSize: '480 KB',
-                          category: 'Surat Resmi Departemen'
-                        });
+                        if (onOpenSuratPengantar) {
+                          onOpenSuratPengantar(klk);
+                        } else {
+                          onPreviewDoc({
+                            label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
+                            fileName: `Surat_Pengantar_Resmi_${klk.nim}.pdf`,
+                            description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${klk.mahasiswaNama} (${klk.nim}) ditujukan kepada Pimpinan Mitra ${klk.namaMitra}.`,
+                            uploadedAt: klk.waktuSubmit || '14 Feb 2026',
+                            fileSize: '480 KB',
+                            category: 'Surat Resmi Departemen'
+                          });
+                        }
                       }}
                       className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
                     >
                       <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                      <span>Cetak Surat Pengantar</span>
+                      <span>Lihat &amp; Cetak Surat Pengantar</span>
                     </button>
                     <button
                       type="button"
@@ -2633,7 +2948,7 @@ export const RingkasanDataFormKlkCard: React.FC<{
           </div>
         )}
 
-        {/* BANNER NOTIFIKASI DARI ADMIN TU (SURAT PENGANTAR & SURAT TUGAS TERBIT) - JIKA DI TAHAP 1 & BELUM DIKIRIM */}
+        {/* BANNER NOTIFIKASI DARI ADMIN TU (SURAT PENGANTAR KE MITRA TERBIT) - JIKA DI TAHAP 1 & BELUM DIKIRIM */}
         {stepContext === 1 && isApprovedAdmin && !klk.suratLamaranDikirim && (
           <div className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-3 shadow-2xs">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2646,7 +2961,7 @@ export const RingkasanDataFormKlkCard: React.FC<{
                     Pengajuan KLK Disetujui &amp; Surat Pengantar ke Mitra Diterbitkan!
                   </div>
                   <p className="text-[11px] text-emerald-800 mt-0.5">
-                    Admin TU Departemen Kimia FSTeM UB telah menyetujui pendaftaran KLK Anda. Surat Pengantar Resmi ke Mitra dan Surat Tugas KLK (No. {klk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'}) telah dikirimkan ke akun Anda.
+                    Admin TU Departemen Kimia FSTeM UB telah menyetujui pendaftaran KLK Anda. Dokumen <strong>Surat Pengantar Resmi ke {klk.namaMitra}</strong> telah dikirimkan ke akun Anda.
                   </p>
                 </div>
               </div>
@@ -2654,37 +2969,34 @@ export const RingkasanDataFormKlkCard: React.FC<{
                 <button
                   type="button"
                   onClick={() => {
-                    onPreviewDoc({
-                      label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
-                      fileName: `Surat_Pengantar_Resmi_${klk.nim}.pdf`,
-                      description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${klk.mahasiswaNama} (${klk.nim}) ditujukan kepada Pimpinan Mitra ${klk.namaMitra}.`,
-                      uploadedAt: klk.waktuSubmit || '14 Feb 2026',
-                      fileSize: '480 KB',
-                      category: 'Surat Resmi Departemen'
-                    });
+                    if (onOpenSuratPengantar) {
+                      onOpenSuratPengantar(klk);
+                    } else {
+                      onPreviewDoc({
+                        label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
+                        fileName: `Surat_Pengantar_Resmi_${klk.nim}.pdf`,
+                        description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${klk.mahasiswaNama} (${klk.nim}) ditujukan kepada Pimpinan Mitra ${klk.namaMitra}.`,
+                        uploadedAt: klk.waktuSubmit || '14 Feb 2026',
+                        fileSize: '480 KB',
+                        category: 'Surat Resmi Departemen'
+                      });
+                    }
                   }}
                   className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
                 >
                   <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Cetak Surat Pengantar</span>
+                  <span>Lihat &amp; Cetak Surat Pengantar</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPreviewDoc({
-                      label: 'Surat Tugas Resmi KLK',
-                      fileName: `Surat_Tugas_Resmi_${klk.nim}.pdf`,
-                      description: `Surat Tugas Resmi Pelaksanaan KLK No. ${klk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'} disahkan oleh Dekan FSTeM & Ketua Departemen Kimia UB.`,
-                      uploadedAt: klk.waktuSubmit || '14 Feb 2026',
-                      fileSize: '520 KB',
-                      category: 'Surat Resmi Departemen'
-                    });
-                  }}
-                  className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
-                >
-                  <FileCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Cetak Surat Tugas</span>
-                </button>
+                {onDownloadSuratPengantarPdf && (
+                  <button
+                    type="button"
+                    onClick={() => onDownloadSuratPengantarPdf(klk)}
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                  >
+                    <Download className="w-3.5 h-3.5 text-white" />
+                    <span>Download PDF</span>
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -2849,88 +3161,6 @@ export const RingkasanDataFormKlkCard: React.FC<{
           </div>
         </div>
 
-        {/* 8. Surat Resmi yang Diterbitkan Departemen (Surat Pengantar ke Mitra & Surat Tugas KLK) */}
-        {isApprovedAdmin && (
-          <div className="p-4 bg-emerald-50/90 rounded-xl border-2 border-emerald-300 space-y-3 shadow-2xs">
-            <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
-              <div className="flex items-center gap-2 font-extrabold text-emerald-950 text-xs">
-                <FileCheck className="w-4 h-4 text-emerald-700" />
-                <span>8. Surat Resmi yang Diterbitkan Departemen (Surat Pengantar ke Mitra &amp; Surat Tugas KLK)</span>
-              </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-950 border border-emerald-400">
-                Terbit &amp; Dikirimkan ke Akun
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Card 1: Surat Pengantar Resmi ke Mitra */}
-              <div className="p-3.5 bg-white rounded-xl border border-emerald-200 shadow-2xs space-y-2 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between gap-1 mb-1">
-                    <span className="font-extrabold text-slate-900 text-xs">Surat Pengantar Resmi KLK (Ke Mitra)</span>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  </div>
-                  <p className="text-[11px] text-slate-600 leading-relaxed">
-                    Surat permohonan resmi pengajuan KLK dari Ketua Departemen Kimia FSTeM UB ditujukan kepada pimpinan instansi mitra <strong>{klk.namaMitra}</strong>.
-                  </p>
-                  <div className="text-[10px] font-mono font-bold text-emerald-900 bg-emerald-50 p-1.5 rounded border border-emerald-200 mt-2">
-                    📄 Surat_Pengantar_Resmi_{klk.nim}.pdf
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPreviewDoc({
-                      label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
-                      fileName: `Surat_Pengantar_Resmi_${klk.nim}.pdf`,
-                      description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${klk.mahasiswaNama} (${klk.nim}) ditujukan kepada Pimpinan Mitra ${klk.namaMitra}.`,
-                      uploadedAt: klk.waktuSubmit || '14 Feb 2026',
-                      fileSize: '480 KB',
-                      category: 'Surat Resmi Departemen'
-                    });
-                  }}
-                  className="w-full py-1.5 bg-[#002B49] hover:bg-[#003865] text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs mt-2"
-                >
-                  <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Lihat &amp; Cetak Surat Pengantar</span>
-                </button>
-              </div>
-
-              {/* Card 2: Surat Tugas Resmi KLK */}
-              <div className="p-3.5 bg-white rounded-xl border border-emerald-200 shadow-2xs space-y-2 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between gap-1 mb-1">
-                    <span className="font-extrabold text-slate-900 text-xs">Surat Tugas Resmi KLK</span>
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                  </div>
-                  <p className="text-[11px] text-slate-600 leading-relaxed">
-                    Surat Tugas Dekan/Departemen No: <strong className="text-slate-900">{klk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'}</strong> sebagai bukti keabsahan pelaksanaan KLK.
-                  </p>
-                  <div className="text-[10px] font-mono font-bold text-emerald-900 bg-emerald-50 p-1.5 rounded border border-emerald-200 mt-2">
-                    📄 Surat_Tugas_Resmi_{klk.nim}.pdf
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    onPreviewDoc({
-                      label: 'Surat Tugas Resmi KLK',
-                      fileName: `Surat_Tugas_Resmi_${klk.nim}.pdf`,
-                      description: `Surat Tugas Resmi Pelaksanaan KLK No. ${klk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'} disahkan oleh Dekan FSTeM & Ketua Departemen Kimia UB.`,
-                      uploadedAt: klk.waktuSubmit || '14 Feb 2026',
-                      fileSize: '520 KB',
-                      category: 'Surat Resmi Departemen'
-                    });
-                  }}
-                  className="w-full py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs mt-2"
-                >
-                  <FileCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
-                  <span>Lihat &amp; Cetak Surat Tugas</span>
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -3006,7 +3236,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
     return null;
   }, [currentUser]);
 
-  const isMahasiswa = currentRole === 'mahasiswa';
+  const isMahasiswa = isMahasiswaRole(currentRole);
   // Hak akses pengelolaan Status KLK & QR Sosialisasi: Super Admin dan Admin (TU)
   const canManageStatus =
     currentRole === 'super_admin' ||
@@ -3179,9 +3409,9 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   const isUserEksternal =
     currentRole === 'eksternal' ||
-    effectiveUser?.role === 'eksternal' ||
-    (effectiveUser?.jabatan && effectiveUser.jabatan.toLowerCase().includes('pembimbing lapangan')) ||
-    (effectiveUser?.unit && effectiveUser.unit.toLowerCase().includes('mitra'));
+    (effectiveUser?.role === 'eksternal' && !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(currentRole)) ||
+    (((effectiveUser?.role as any) === 'pembimbing_lapangan' || (effectiveUser?.role as any) === 'mentor') &&
+      !['dosen', 'mahasiswa', 'admin', 'super_admin'].includes(currentRole));
 
   // Batasi daftar KLK: jika peran mahasiswa, hanya tampilkan aktivitas mahasiswa yang sedang login; jika eksternal, tampilkan mahasiswa bimbingan mitra
   const roleScopedKlkList = useMemo(() => {
@@ -3210,6 +3440,8 @@ export const KlkView: React.FC<KlkViewProps> = ({
       rawList = matched;
     } else if (isMahasiswa) {
       rawList = klkList.filter(isKlkBelongsToCurrentStudent);
+    } else if (currentRole === 'dosen' || effectiveUser?.role === 'dosen') {
+      rawList = klkList.filter((item) => checkIsDosenPAForStudent(effectiveUser || currentUser, item, mahasiswaList));
     }
 
     // Pastikan jika Dosen Pembimbing KLK belum disetujui/ditetapkan oleh Admin TU pada Tahap 3, statusnya adalah "Belum Ditetapkan"
@@ -3223,10 +3455,23 @@ export const KlkView: React.FC<KlkViewProps> = ({
       }
       return k;
     });
-  }, [klkList, isMahasiswa, isUserEksternal, effectiveUser, currentUser]);
+  }, [klkList, isMahasiswa, isUserEksternal, effectiveUser, currentUser, currentRole, mahasiswaList]);
 
+  const klkSubTabStorageKey = `sikma_klk_active_subtab_${effectiveUser?.id || currentRole}`;
   const defaultSubTab: KlkSubTab = (isUserEksternal ? 'aktivitas-pembimbing-lapangan' : initialSubTab) as KlkSubTab;
-  const [subTab, setSubTab] = useState<KlkSubTab>(defaultSubTab);
+  const [subTab, setSubTab] = useState<KlkSubTab>(() => {
+    try {
+      const saved = sessionStorage.getItem(klkSubTabStorageKey);
+      if (saved) return saved as KlkSubTab;
+    } catch {}
+    return defaultSubTab;
+  });
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(klkSubTabStorageKey, subTab);
+    } catch {}
+  }, [klkSubTabStorageKey, subTab]);
 
   useEffect(() => {
     if (isUserEksternal && subTab === 'form-baru') {
@@ -3268,15 +3513,17 @@ export const KlkView: React.FC<KlkViewProps> = ({
     );
   }, [roleScopedKlkList, logbookKlkSearch]);
 
-  // Otomatis pilih item pertama jika hasil pencarian berubah dan selectedKlkId tidak ada dalam hasil filter
+  // Otomatis pilih item pertama jika hasil pencarian/filter berubah dan selectedKlkId tidak ada dalam hasil filter
   useEffect(() => {
-    if (logbookKlkSearch.trim() && filteredRoleScopedKlkList.length > 0) {
+    if (filteredRoleScopedKlkList.length > 0) {
       const exists = filteredRoleScopedKlkList.some((k) => k.id === selectedKlkId);
       if (!exists) {
         setSelectedKlkId(filteredRoleScopedKlkList[0].id);
       }
+    } else {
+      setSelectedKlkId('');
     }
-  }, [logbookKlkSearch, filteredRoleScopedKlkList, selectedKlkId]);
+  }, [filteredRoleScopedKlkList, selectedKlkId]);
 
   // Hak akses khusus Super Admin
   const isSuperAdmin =
@@ -3320,28 +3567,10 @@ export const KlkView: React.FC<KlkViewProps> = ({
   // - Role Eksternal: TIDAK DITAMPILKAN
   const canShowUnduhanTab = !isUserEksternal;
 
-  // Safeguard: Redirect otomatis jika peran tanpa otorisasi berada di tab yang tidak diizinkan
-  useEffect(() => {
-    if (isUserEksternal && subTab !== 'aktivitas-pembimbing-lapangan') {
-      setSubTab('aktivitas-pembimbing-lapangan');
-      return;
-    }
-    if (!canShowAktivitasPembimbingLapangan && subTab === 'aktivitas-pembimbing-lapangan') {
-      setSubTab(isDosen ? 'verifikasi-pengajuan-dosen' : isMahasiswa ? 'form-baru' : 'verifikasi-pengajuan');
-    }
-    if (!canShowFormPengajuanKlk && subTab === 'form-baru') {
-      setSubTab(isDosen ? 'verifikasi-pengajuan-dosen' : isMahasiswa ? 'form-baru' : 'verifikasi-pengajuan');
-    }
-    if (!canShowLogbookTab && subTab === 'logbook-mingguan') {
-      setSubTab(isDosen ? 'verifikasi-pengajuan-dosen' : isMahasiswa ? 'form-baru' : 'verifikasi-pengajuan');
-    }
-    if (!canShowBimbinganDosenTab && subTab === 'bimbingan-dosen') {
-      setSubTab(isDosen ? 'verifikasi-pengajuan-dosen' : isMahasiswa ? 'form-baru' : 'verifikasi-pengajuan');
-    }
-    if (!canShowUnduhanTab && subTab === 'unduhan-panduan') {
-      setSubTab(isMahasiswa ? 'form-baru' : isDosen ? 'verifikasi-pengajuan-dosen' : 'verifikasi-pengajuan');
-    }
-  }, [canShowAktivitasPembimbingLapangan, canShowFormPengajuanKlk, canShowLogbookTab, canShowBimbinganDosenTab, canShowUnduhanTab, subTab, isDosen, isMahasiswa, isUserEksternal]);
+  // Tab Seminar & Nilai Akhir:
+  // - Role Mahasiswa (S1/S2/S3) & Eksternal: TIDAK DITAMPILKAN
+  // - Role Super Admin, Admin (TU), & Dosen: DITAMPILKAN
+  const canShowSeminarNilaiTab = !isUserEksternal && !isMahasiswa;
 
   // Dosen PA untuk sekurang-kurangnya satu mahasiswa di daftar mahasiswa atau daftar KLK
   const isDosenPAForAnyKlk = useMemo(() => {
@@ -3381,6 +3610,59 @@ export const KlkView: React.FC<KlkViewProps> = ({
   // Tab Verifikasi Pengajuan KLK (Dosen) ditampilkan kepada Super Admin dan Dosen Pembimbing Akademik (Dosen PA)
   const canAccessVerifikasiDosen = isSuperAdmin || (isDosen && isDosenPAForAnyKlk);
 
+  // Safeguard: Redirect otomatis jika peran tanpa otorisasi berada di tab yang tidak diizinkan
+  useEffect(() => {
+    const defaultRoleTab: KlkSubTab = isUserEksternal
+      ? 'aktivitas-pembimbing-lapangan'
+      : isDosen
+      ? (canAccessVerifikasiDosen ? 'verifikasi-pengajuan-dosen' : 'logbook-mingguan')
+      : isMahasiswa
+      ? 'form-baru'
+      : 'verifikasi-pengajuan';
+
+    if (isUserEksternal && subTab !== 'aktivitas-pembimbing-lapangan') {
+      setSubTab('aktivitas-pembimbing-lapangan');
+      return;
+    }
+    if (!canShowAktivitasPembimbingLapangan && subTab === 'aktivitas-pembimbing-lapangan') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canShowFormPengajuanKlk && subTab === 'form-baru') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canAccessVerifikasiDosen && subTab === 'verifikasi-pengajuan-dosen') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!isSuperAdminOrAdmin && subTab === 'verifikasi-pengajuan') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canShowLogbookTab && subTab === 'logbook-mingguan') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canShowBimbinganDosenTab && subTab === 'bimbingan-dosen') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canShowSeminarNilaiTab && subTab === 'penilaian-seminar') {
+      setSubTab(defaultRoleTab);
+    }
+    if (!canShowUnduhanTab && subTab === 'unduhan-panduan') {
+      setSubTab(defaultRoleTab);
+    }
+  }, [
+    canShowAktivitasPembimbingLapangan,
+    canShowFormPengajuanKlk,
+    canAccessVerifikasiDosen,
+    isSuperAdminOrAdmin,
+    canShowLogbookTab,
+    canShowBimbinganDosenTab,
+    canShowSeminarNilaiTab,
+    canShowUnduhanTab,
+    subTab,
+    isDosen,
+    isMahasiswa,
+    isUserEksternal
+  ]);
+
   // State khusus Tab Verifikasi Pengajuan KLK (Khusus Super Admin dan Admin)
   const [selectedVerifikasiKlkId, setSelectedVerifikasiKlkId] = useState<string>(() => {
     return klkList.length > 0 ? klkList[0].id : '';
@@ -3393,11 +3675,131 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const [verifikasiToastSuccess, setVerifikasiToastSuccess] = useState<boolean>(false);
   const [verifikasiToastMessage, setVerifikasiToastMessage] = useState<string>('');
   const [verifikasiDosenPembimbingKlk, setVerifikasiDosenPembimbingKlk] = useState<string>('');
+  const [selectedAdminDecision, setSelectedAdminDecision] = useState<'Disetujui' | 'Ditolak'>('Disetujui');
+  const [isEditingAdminDecision, setIsEditingAdminDecision] = useState<boolean>(false);
+  const [suratPengantarAdminModalOpen, setSuratPengantarAdminModalOpen] = useState<boolean>(false);
+  const [suratPengantarAdminKlkId, setSuratPengantarAdminKlkId] = useState<string>('');
+  const [suratPengantarDraft, setSuratPengantarDraft] = useState<SuratPengantarKlkData | null>(null);
+  const [suratPengantarQrUrl, setSuratPengantarQrUrl] = useState<string>('');
+  const [isEditingIsiSurat, setIsEditingIsiSurat] = useState<boolean>(false);
+  const [suratPengantarSaveNotice, setSuratPengantarSaveNotice] = useState<string | null>(null);
+  const [suratPengantarReadOnlyMode, setSuratPengantarReadOnlyMode] = useState<boolean>(false);
+
+  const handleOpenSuratPengantarAdmin = async (klk: PengajuanKLK) => {
+    const initialData = getSuratPengantarDataForKlk(klk, mahasiswaList);
+    setSuratPengantarAdminKlkId(klk.id);
+    setSuratPengantarDraft(initialData);
+    setIsEditingIsiSurat(false);
+    setSuratPengantarSaveNotice(null);
+    setSuratPengantarReadOnlyMode(false);
+    setSuratPengantarAdminModalOpen(true);
+    try {
+      const qr = await generateSuratPengantarQrDataUrl(initialData);
+      setSuratPengantarQrUrl(qr);
+    } catch {
+      setSuratPengantarQrUrl('');
+    }
+  };
+
+  const handleOpenSuratPengantarMahasiswa = async (klk: PengajuanKLK) => {
+    const initialData = getSuratPengantarDataForKlk(klk, mahasiswaList);
+    setSuratPengantarAdminKlkId(klk.id);
+    setSuratPengantarDraft(initialData);
+    setIsEditingIsiSurat(false);
+    setSuratPengantarSaveNotice(null);
+    setSuratPengantarReadOnlyMode(true);
+    setSuratPengantarAdminModalOpen(true);
+    try {
+      const qr = await generateSuratPengantarQrDataUrl(initialData);
+      setSuratPengantarQrUrl(qr);
+    } catch {
+      setSuratPengantarQrUrl('');
+    }
+  };
+
+  const handleQuickPrintSuratPengantarAdmin = async (klk: PengajuanKLK) => {
+    const data = getSuratPengantarDataForKlk(klk, mahasiswaList);
+    const qr = await generateSuratPengantarQrDataUrl(data);
+    await printSuratPengantarPerusahaan({ ...data, qrDataUrl: qr });
+  };
+
+  const handleQuickDownloadSuratPengantarAdmin = async (klk: PengajuanKLK) => {
+    const data = getSuratPengantarDataForKlk(klk, mahasiswaList);
+    const qr = await generateSuratPengantarQrDataUrl(data);
+    await downloadSuratPengantarPerusahaanPdf({ ...data, qrDataUrl: qr });
+    setVerifikasiToastMessage(
+      `Surat Pengantar KLK ke ${data.namaMitra} (${data.mahasiswaNama}) berhasil diunduh dalam format PDF.`
+    );
+    setVerifikasiToastSuccess(true);
+    setTimeout(() => setVerifikasiToastSuccess(false), 4000);
+  };
+
+  useEffect(() => {
+    if (!suratPengantarAdminModalOpen || !suratPengantarDraft) return;
+    let cancelled = false;
+    generateSuratPengantarQrDataUrl(suratPengantarDraft)
+      .then((qr) => {
+        if (!cancelled) setSuratPengantarQrUrl(qr);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    suratPengantarAdminModalOpen,
+    suratPengantarDraft?.nomorSurat,
+    suratPengantarDraft?.perihal,
+    suratPengantarDraft?.namaMitra,
+    suratPengantarDraft?.mahasiswaNama,
+    suratPengantarDraft?.nim,
+    suratPengantarDraft?.tanggalSurat,
+    suratPengantarDraft?.keperluan
+  ]);
 
   // Item KLK terpilih pada Tab Verifikasi Pengajuan KLK
   const selectedVerifikasiKlk = useMemo(() => {
     return klkList.find((k) => k.id === selectedVerifikasiKlkId) || klkList[0] || null;
   }, [klkList, selectedVerifikasiKlkId]);
+
+  // Mengetahui apakah keputusan verifikasi Admin sudah pernah disimpan untuk pengajuan saat ini
+  const isAdminDecisionAlreadySubmitted = useMemo(() => {
+    if (!selectedVerifikasiKlk) return false;
+    if (
+      selectedVerifikasiKlk.status === 'Menunggu Persetujuan Dept' ||
+      selectedVerifikasiKlk.status === 'Diproses' ||
+      selectedVerifikasiKlk.status === 'Draft'
+    ) {
+      return false;
+    }
+    if (
+      selectedVerifikasiKlk.status === 'Disetujui' ||
+      selectedVerifikasiKlk.status === 'Disetujui / Sedang Berjalan' ||
+      selectedVerifikasiKlk.status === 'Selesai & Dinilai'
+    ) {
+      return true;
+    }
+    if (selectedVerifikasiKlk.status === 'Ditolak') {
+      if (selectedVerifikasiKlk.statusVerifikasiDosen === 'Ditolak') {
+        return false;
+      }
+      if (selectedVerifikasiKlk.statusVerifikasiDosen === 'Disetujui Dosen') {
+        return true;
+      }
+      const riwayat = selectedVerifikasiKlk.riwayatAktivitas || [];
+      const latestAction = riwayat[0];
+      if (
+        latestAction &&
+        (latestAction.role === 'Admin' || latestAction.role === 'Super Admin') &&
+        (latestAction.statusHasil === 'Ditolak' || latestAction.tahap?.includes('Tahap 3'))
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }, [selectedVerifikasiKlk]);
+
+  // Panel verifikasi Admin aktif HANYA jika belum disimpan ATAU sedang dalam mode Edit Keputusan
+  const isAdminDecisionPanelActive = !isAdminDecisionAlreadySubmitted || isEditingAdminDecision;
 
   // Filter daftar mahasiswa pengaju KLK untuk Box Sebelah Kiri
   const filteredVerifikasiList = useMemo(() => {
@@ -3420,6 +3822,19 @@ export const KlkView: React.FC<KlkViewProps> = ({
     });
   }, [klkList, verifikasiSearchQuery, verifikasiStatusFilter]);
 
+  const [verifikasiPage, setVerifikasiPage] = useState<number>(1);
+  const verifikasiItemsPerPage = 10;
+
+  useEffect(() => {
+    setVerifikasiPage(1);
+  }, [verifikasiSearchQuery, verifikasiStatusFilter]);
+
+  const totalVerifikasiPages = Math.ceil(filteredVerifikasiList.length / verifikasiItemsPerPage) || 1;
+  const paginatedVerifikasiList = useMemo(() => {
+    const start = (verifikasiPage - 1) * verifikasiItemsPerPage;
+    return filteredVerifikasiList.slice(start, start + verifikasiItemsPerPage);
+  }, [filteredVerifikasiList, verifikasiPage]);
+
   // Sinkronisasi id terpilih jika list berubah
   useEffect(() => {
     if (klkList.length > 0 && !klkList.some((k) => k.id === selectedVerifikasiKlkId)) {
@@ -3427,11 +3842,19 @@ export const KlkView: React.FC<KlkViewProps> = ({
     }
   }, [klkList, selectedVerifikasiKlkId]);
 
-  // Sinkronisasi catatan verifikasi & penetapan Dosen Pembimbing KLK oleh Admin
+  // Reset mode edit keputusan Admin saat pindah mahasiswa terpilih
   useEffect(() => {
-    if (selectedVerifikasiKlk) {
+    setIsEditingAdminDecision(false);
+  }, [selectedVerifikasiKlkId]);
+
+  // Sinkronisasi catatan verifikasi, keputusan, & penetapan Dosen Pembimbing KLK oleh Admin
+  useEffect(() => {
+    if (selectedVerifikasiKlk && !isEditingAdminDecision) {
       setVerifikasiCatatan(selectedVerifikasiKlk.catatanVerifikasi || '');
       setVerifikasiCatatanError('');
+      setSelectedAdminDecision(
+        selectedVerifikasiKlk.status === 'Ditolak' ? 'Ditolak' : 'Disetujui'
+      );
 
       const student = mahasiswaList.find(
         (m) =>
@@ -3447,7 +3870,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
           : dpaName
       );
     }
-  }, [selectedVerifikasiKlkId, selectedVerifikasiKlk, mahasiswaList]);
+  }, [selectedVerifikasiKlkId, selectedVerifikasiKlk, mahasiswaList, isEditingAdminDecision]);
 
   // Handler Verifikasi Pengajuan KLK oleh Super Admin & Admin
   const handleUpdateStatusVerifikasi = (
@@ -3517,8 +3940,29 @@ export const KlkView: React.FC<KlkViewProps> = ({
       isDosenKLKDitetapkanAdmin: newStatus === 'Disetujui' ? true : selectedVerifikasiKlk.isDosenKLKDitetapkanAdmin,
       dosenPembimbingKLKDitetapkan: newStatus === 'Disetujui' ? true : selectedVerifikasiKlk.dosenPembimbingKLKDitetapkan,
       nomorSuratTugas: nomorTugasBaru,
+      suratPengantarTerkirimKeMahasiswa:
+        newStatus === 'Disetujui'
+          ? true
+          : newStatus === 'Ditolak'
+          ? false
+          : selectedVerifikasiKlk.suratPengantarTerkirimKeMahasiswa,
+      waktuKirimSuratPengantarKeMahasiswa:
+        newStatus === 'Disetujui'
+          ? waktuNow
+          : newStatus === 'Ditolak'
+          ? undefined
+          : selectedVerifikasiKlk.waktuKirimSuratPengantarKeMahasiswa,
+      suratPengantarPengirim:
+        newStatus === 'Disetujui'
+          ? entryAdmin.namaAktor
+          : selectedVerifikasiKlk.suratPengantarPengirim,
       riwayatAktivitas: [entryAdmin, ...existingRiwayat]
     };
+
+    if (newStatus === 'Disetujui') {
+      const suratFinalData = getSuratPengantarDataForKlk(updatedItem, mahasiswaList);
+      saveCustomSuratPengantarForKlk(updatedItem.id, suratFinalData);
+    }
 
     const idx = klkList.findIndex((k) => k.id === updatedItem.id);
     if (idx !== -1) {
@@ -3544,6 +3988,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
         `Pengajuan KLK mahasiswa ${updatedItem.mahasiswaNama} (${updatedItem.nim}) berhasil diperbarui!`
       );
     }
+    setIsEditingAdminDecision(false);
     setVerifikasiToastSuccess(true);
     setTimeout(() => setVerifikasiToastSuccess(false), 4500);
   };
@@ -3717,6 +4162,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   // Toggle checklist validitas berkas (Centang Utama)
   const handleToggleDocValid = (klk: PengajuanKLK, docKey: string) => {
+    if (!isAdminDecisionPanelActive) return;
     const current = getDocChecklist(klk, docKey);
     const willBeValid = !current.isValid;
     const docConfig = DOKUMEN_KLK_CONFIG.find((d) => d.key === docKey);
@@ -3756,6 +4202,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   // Toggle kriteria spesifik dalam satu berkas
   const handleToggleCriterion = (klk: PengajuanKLK, docKey: string, critId: string) => {
+    if (!isAdminDecisionPanelActive) return;
     const current = getDocChecklist(klk, docKey);
     const docConfig = DOKUMEN_KLK_CONFIG.find((d) => d.key === docKey);
     const currentCrit = { ...(current.kriteria || {}) };
@@ -3786,6 +4233,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   // Set catatan khusus per berkas
   const handleSetDocCatatan = (klk: PengajuanKLK, docKey: string, note: string) => {
+    if (!isAdminDecisionPanelActive) return;
     const current = getDocChecklist(klk, docKey);
     const updatedDoc: BerkasChecklistItem = {
       ...current,
@@ -3796,6 +4244,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   // Tandai Semua 4 Berkas Valid Sekaligus (1-Klik untuk Admin)
   const handleMarkAllDocsValid = (klk: PengajuanKLK) => {
+    if (!isAdminDecisionPanelActive) return;
     const todayStr = new Date().toLocaleDateString('id-ID', {
       day: 'numeric',
       month: 'short',
@@ -3829,6 +4278,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   // Reset Checklist Berkas
   const handleResetDocChecklist = (klk: PengajuanKLK) => {
+    if (!isAdminDecisionPanelActive) return;
     const newMap: Record<string, BerkasChecklistItem> = {};
     DOKUMEN_KLK_CONFIG.forEach((doc) => {
       newMap[doc.key] = {
@@ -4200,9 +4650,12 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const [revisiFormError, setRevisiFormError] = useState<string>('');
   const [revisiSaveSuccess, setRevisiSaveSuccess] = useState<string | null>(null);
   const [revisiPeriodeSaveSuccess, setRevisiPeriodeSaveSuccess] = useState<string | null>(null);
+  const [isOpsionalRevisiPanelOpen, setIsOpsionalRevisiPanelOpen] = useState<boolean>(true);
 
   // State Upload Surat dari Perusahaan/Instansi yang Ditujukan ke Dosen Pembimbing KLK (Respon Diterima)
   const [suratBalasanFile, setSuratBalasanFile] = useState<File | null>(null);
+  const [suratBalasanFileDataUrl, setSuratBalasanFileDataUrl] = useState<string | null>(null);
+  const [suratBalasanFileMime, setSuratBalasanFileMime] = useState<string>('');
   const [suratBalasanFileName, setSuratBalasanFileName] = useState<string>('');
   const [suratBalasanNomor, setSuratBalasanNomor] = useState<string>('');
   const [suratBalasanTanggal, setSuratBalasanTanggal] = useState<string>(() => new Date().toISOString().split('T')[0]);
@@ -4211,6 +4664,9 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const [suratBalasanSuccessNotice, setSuratBalasanSuccessNotice] = useState<string | null>(null);
   const [suratBalasanFormError, setSuratBalasanFormError] = useState<string | null>(null);
   const [isEditingSuratBalasan, setIsEditingSuratBalasan] = useState<boolean>(false);
+  const [isReadingSuratBalasanFile, setIsReadingSuratBalasanFile] = useState<boolean>(false);
+  const [suratMitraPreviewKlk, setSuratMitraPreviewKlk] = useState<PengajuanKLK | null>(null);
+  const [suratMitraPreviewMode, setSuratMitraPreviewMode] = useState<'auto' | 'file' | 'structured'>('auto');
 
   // State Verifikasi & Persetujuan Berkas Surat Perusahaan oleh Dosen Pembimbing KLK
   const [catatanVerifikasiSuratMitra, setCatatanVerifikasiSuratMitra] = useState<string>('');
@@ -4221,6 +4677,15 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const revisiTotalSks = useMemo(() => {
     return revisiMkList.reduce((sum, item) => sum + extractSksFromMkKonversi(item), 0);
   }, [revisiMkList]);
+
+  const revisiSerialConflicts = useMemo(() => {
+    return checkAllSerialConflicts(revisiMkList);
+  }, [revisiMkList]);
+
+  const hasRevisiSerialConflict = revisiSerialConflicts.length > 0;
+
+  const isRevisiKombinasiSksValid =
+    TARGET_KOMBINASI_SKS_KLK.includes(revisiTotalSks as any) && !hasRevisiSerialConflict;
 
   const filteredRevisiMkList = useMemo(() => {
     if (!searchRevisiMk.trim()) return DAFTAR_MATA_KULIAH_KONVERSI_KLK;
@@ -4239,6 +4704,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const handleToggleRevisiMkKonversi = (mkStr: string) => {
     setRevisiMkWarning(null);
     setRevisiSaveSuccess(null);
+    setRevisiFormError('');
     const isSelected = revisiMkList.includes(mkStr);
 
     if (isSelected) {
@@ -4247,22 +4713,9 @@ export const KlkView: React.FC<KlkViewProps> = ({
       const newTotal = updated.reduce((sum, item) => sum + extractSksFromMkKonversi(item), 0);
       setRevisiTargetSks(newTotal);
     } else {
-      const conflictWith = getSerialConflictWith(mkStr, revisiMkList);
-      if (conflictWith) {
-        const infoTarget = parseMkKonversiString(mkStr);
-        const infoConflict = parseMkKonversiString(conflictWith);
-        setRevisiMkWarning(
-          `Mata kuliah "${infoTarget.nama}" merupakan pasangan mata kuliah berseri dengan "${infoConflict.nama}". Mahasiswa tidak diperbolehkan mengambil kedua mata kuliah berseri ini secara bersamaan.`
-        );
-        return;
-      }
-
-      const currentTotal = revisiMkList.reduce((sum, item) => sum + extractSksFromMkKonversi(item), 0);
-      const mkInfo = parseMkKonversiString(mkStr);
-      if (currentTotal + mkInfo.sks > 16) {
-        setRevisiMkWarning(
-          `Total SKS tidak boleh melebihi 16 SKS. Menambahkan "${mkInfo.nama}" (${mkInfo.sks} SKS) akan membuat total SKS menjadi ${currentTotal + mkInfo.sks} SKS.`
-        );
+      const checkResult = checkCanSelectMkKonversi(mkStr, revisiMkList);
+      if (!checkResult.canSelect) {
+        setRevisiMkWarning(checkResult.message || 'Mata kuliah ini tidak dapat dipilih karena tidak memenuhi aturan kombinasi SKS.');
         return;
       }
 
@@ -4276,6 +4729,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
   const handleSelectRevisiTargetSksPreset = (targetSks: number) => {
     setRevisiMkWarning(null);
     setRevisiSaveSuccess(null);
+    setRevisiFormError('');
     setRevisiTargetSks(targetSks);
     const preset = REKOMENDASI_PAKET_SKS_KLK[targetSks];
     if (preset) {
@@ -4289,13 +4743,13 @@ export const KlkView: React.FC<KlkViewProps> = ({
     setRevisiSaveSuccess(null);
 
     if (revisiMkList.length === 0) {
-      setRevisiFormError('Mohon pilih minimal 1 Mata Kuliah Konversi untuk usulan revisi!');
+      setRevisiFormError('Mohon pilih minimal 1 Mata Kuliah Konversi dengan total kombinasi 4, 7, 10, 13, atau 16 SKS!');
       return;
     }
 
     const totalSks = revisiMkList.reduce((sum, item) => sum + extractSksFromMkKonversi(item), 0);
     if (totalSks > 16) {
-      setRevisiFormError(`Total SKS konversi (${totalSks} SKS) melebihi batas maksimal 16 SKS!`);
+      setRevisiFormError(`Total SKS konversi (${totalSks} SKS) melebihi batas maksimal 16 SKS! Pilihan hanya boleh memenuhi kombinasi 4, 7, 10, 13, atau 16 SKS.`);
       return;
     }
 
@@ -4303,6 +4757,13 @@ export const KlkView: React.FC<KlkViewProps> = ({
     if (serialConflicts.length > 0) {
       setRevisiFormError(
         `Terdapat konflik mata kuliah berseri: "${serialConflicts[0].pairName || 'Mata kuliah berseri'}". Mohon pilih salah satu saja.`
+      );
+      return;
+    }
+
+    if (!TARGET_KOMBINASI_SKS_KLK.includes(totalSks as any)) {
+      setRevisiFormError(
+        `Kombinasi total SKS saat ini (${totalSks} SKS) tidak memenuhi ketentuan dan tidak dapat disimpan/disubmit! Mata kuliah konversi yang dipilih wajib memenuhi tepat salah satu target kombinasi: 4, 7, 10, 13, atau 16 SKS (jumlah pilihan seperti 9 SKS, 12 SKS, atau melebihi 16 SKS tidak diperbolehkan).`
       );
       return;
     }
@@ -4409,7 +4870,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
     // Validasi Revisi MK Konversi jika diaktifkan
     if (isRevisiMkKonversi) {
       if (revisiMkList.length === 0) {
-        setRevisiFormError('Mohon pilih minimal 1 Mata Kuliah Konversi untuk usulan revisi!');
+        setRevisiFormError('Mohon pilih minimal 1 Mata Kuliah Konversi dengan total kombinasi 4, 7, 10, 13, atau 16 SKS!');
         return;
       }
 
@@ -4423,6 +4884,13 @@ export const KlkView: React.FC<KlkViewProps> = ({
       if (serialConflicts.length > 0) {
         setRevisiFormError(
           `Terdapat konflik mata kuliah berseri: "${serialConflicts[0].pairName || 'Mata kuliah berseri'}". Mohon pilih salah satu saja.`
+        );
+        return;
+      }
+
+      if (!TARGET_KOMBINASI_SKS_KLK.includes(totalSks as any)) {
+        setRevisiFormError(
+          `Kombinasi total SKS revisi saat ini (${totalSks} SKS) tidak memenuhi ketentuan dan tidak dapat disubmit! Mata kuliah konversi yang dipilih hanya boleh memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS (contoh: jumlah pilihan 9 SKS, 12 SKS, atau melebihi 16 SKS tidak dapat disubmit).`
         );
         return;
       }
@@ -4511,11 +4979,11 @@ export const KlkView: React.FC<KlkViewProps> = ({
     if (respon === 'Diterima') {
       newKlkStatus = 'Disetujui / Sedang Berjalan';
       aksiText = 'Konfirmasi Diterima di Instansi Mitra';
-      catatanText = `Mahasiswa mengonfirmasi resmi DITERIMA di instansi mitra ${targetKlk.namaMitra}. Silakan lanjutkan ke Tahap 6: unggah dan kirimkan Surat Balasan / Penerimaan resmi dari instansi mitra yang ditujukan kepada Dosen Pembimbing KLK (${dosenTujuan}) agar dapat diverifikasi sebelum akses Logbook dan Bimbingan dibuka.`;
+      catatanText = `Mahasiswa mengonfirmasi resmi DITERIMA di instansi mitra ${targetKlk.namaMitra}. Silakan unggah & kirimkan Surat Penerimaan resmi dari perusahaan/mitra kepada Dosen Pembimbing KLK (${dosenTujuan}) agar akses Logbook Mingguan dan Bimbingan Dosen terbuka.`;
     } else {
       newKlkStatus = 'Ditolak';
       aksiText = 'Konfirmasi Ditolak oleh Instansi Mitra';
-      catatanText = `Mahasiswa mengonfirmasi permohonan DITOLAK oleh instansi mitra ${targetKlk.namaMitra}. Sesuai prosedur, mahasiswa mengulang dari awal pengisian formulir usulan KLK baru.`;
+      catatanText = `Mahasiswa mengonfirmasi permohonan DITOLAK oleh instansi mitra ${targetKlk.namaMitra}. Sesuai prosedur, pengajuan sebelumnya diarsipkan pada riwayat dan mahasiswa mengulang pengisian formulir pengajuan KLK dari awal.`;
     }
 
     const entryRespon: ItemRiwayatKLK = {
@@ -4532,9 +5000,17 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
     const updatedItem: PengajuanKLK = {
       ...targetKlk,
+      suratLamaranDikirim: targetKlk.suratLamaranDikirim || true,
+      waktuKirimSuratLamaran: targetKlk.waktuKirimSuratLamaran || waktuNow,
       status: newKlkStatus,
       statusResponMitra: respon,
       waktuResponMitra: waktuNow,
+      ...(respon === 'Ditolak'
+        ? {
+            suratPengantarTerkirimKeMahasiswa: false,
+            waktuKirimSuratPengantarKeMahasiswa: undefined
+          }
+        : {}),
       riwayatAktivitas: [entryRespon, ...existingRiwayat]
     };
 
@@ -4548,7 +5024,6 @@ export const KlkView: React.FC<KlkViewProps> = ({
     }
 
     if (respon === 'Diterima') {
-      // Jika Diterima: Siapkan default template file surat balasan mitra
       if (!suratBalasanFileName) {
         setSuratBalasanFileName(`Surat_Penerimaan_Resmi_${targetKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`);
       }
@@ -4556,6 +5031,25 @@ export const KlkView: React.FC<KlkViewProps> = ({
         setSuratBalasanNomor(`HRD/EXT/${Math.floor(100 + Math.random() * 900)}/KLK/2026`);
       }
       setIsEditingSuratBalasan(false);
+    } else {
+      // Ditolak mitra: bersihkan field form instansi agar mahasiswa mulai mengisi form KLK dari awal
+      clearSuratBalasanFile(targetKlk.id);
+      setSuratBalasanFile(null);
+      setSuratBalasanFileDataUrl(null);
+      setSuratBalasanFileMime('');
+      setSuratBalasanFileName('');
+      setSuratBalasanNomor('');
+      setSuratBalasanCatatan('');
+      setFormMitra('');
+      setFormAlamatMitra('');
+      setFormBidangPekerjaan('');
+      setFormMentor('');
+      setFormKontakMentor('');
+      setFormHpPembimbing('');
+      setFormEmailPembimbing('');
+      setFormTglMulai('');
+      setFormTglSelesai('');
+      setFormDeskripsiAlasanKonversi('');
     }
   };
 
@@ -4575,15 +5069,25 @@ export const KlkView: React.FC<KlkViewProps> = ({
     const waktuNow = formatTanggalJamWib();
     const existingRiwayat = getOrInitRiwayatKlk(targetKlk);
 
+    if (suratBalasanFileDataUrl) {
+      saveSuratBalasanFile(targetKlk.id, {
+        fileName: namaFile,
+        mimeType: suratBalasanFileMime || suratBalasanFile?.type || 'application/pdf',
+        dataUrl: suratBalasanFileDataUrl,
+        sizeBytes: suratBalasanFile?.size,
+        uploadedAt: waktuNow
+      });
+    }
+
     const entrySuratBalasan: ItemRiwayatKLK = {
       id: `riwayat-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
       waktu: waktuNow,
       timestamp: Date.now(),
       role: 'Mahasiswa',
       namaAktor: targetKlk.mahasiswaNama,
-      aksi: 'Mengunggah & Mengirimkan Surat Perusahaan ke Dosen Pembimbing KLK',
-      statusHasil: 'Surat Mitra Terkirim',
-      catatan: `Mahasiswa mengunggah dan mengirimkan Surat Penerimaan resmi dari instansi mitra ${targetKlk.namaMitra} (No: ${nomorSurat}, Tgl: ${tglSurat}) yang ditujukan kepada Dosen Pembimbing KLK (${dosenTujuan}). Menunggu evaluasi & persetujuan Dosen Pembimbing KLK (Tahap 7). Dokumen: ${namaFile}.`,
+      aksi: 'Mengunggah Surat Perusahaan ke Dosen Pembimbing KLK & Membuka Logbook & Bimbingan',
+      statusHasil: 'Surat Mitra Terkirim • Logbook & Bimbingan Terbuka',
+      catatan: `Mahasiswa mengunggah dan mengirimkan Surat Penerimaan resmi dari instansi mitra ${targetKlk.namaMitra} (No: ${nomorSurat}, Tgl: ${tglSurat}) kepada Dosen Pembimbing KLK (${dosenTujuan}). Akses Logbook Mingguan dan Bimbingan Dosen kini telah resmi terbuka untuk mahasiswa. Dokumen: ${namaFile}.`,
       tahap: 'Tahap 6: Unggah Surat Perusahaan ke Dosen Pembimbing KLK'
     };
 
@@ -4595,8 +5099,8 @@ export const KlkView: React.FC<KlkViewProps> = ({
       catatanSuratBalasanMitra: suratBalasanCatatan.trim() || undefined,
       waktuKirimSuratBalasanMitra: waktuNow,
       suratBalasanTerkirimKeDosen: true,
-      suratMitraDisetujuiDosen: false,
-      statusVerifikasiSuratMitraDosen: 'Menunggu Verifikasi',
+      suratMitraDisetujuiDosen: targetKlk.suratMitraDisetujuiDosen ?? false,
+      statusVerifikasiSuratMitraDosen: targetKlk.suratMitraDisetujuiDosen ? 'Disetujui' : 'Menunggu Verifikasi',
       status: 'Disetujui / Sedang Berjalan',
       riwayatAktivitas: [entrySuratBalasan, ...existingRiwayat]
     };
@@ -4613,7 +5117,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
     setSuratBalasanIsSubmitting(false);
     setIsEditingSuratBalasan(false);
     setSuratBalasanSuccessNotice(
-      `Surat resmi dari instansi mitra ${targetKlk.namaMitra} berhasil dikirimkan kepada Dosen Pembimbing KLK (${dosenTujuan})! Menunggu pengecekan & persetujuan Dosen untuk membuka akses Logbook dan Bimbingan.`
+      `Surat resmi dari ${targetKlk.namaMitra} berhasil dikirimkan ke Dosen Pembimbing KLK (${dosenTujuan})! Akses Logbook Mingguan dan Bimbingan Dosen kini resmi terbuka.`
     );
     setTimeout(() => {
       setSuratBalasanSuccessNotice(null);
@@ -5027,23 +5531,11 @@ export const KlkView: React.FC<KlkViewProps> = ({
       return;
     }
 
-    // Periksa apakah ada konflik dengan mata kuliah berseri/berurutan yang telah dipilih
-    const conflictMk = getSerialConflictWith(mkStr, formMkKonversiList);
-    if (conflictMk) {
-      const targetInfo = parseMkKonversiString(mkStr);
-      const conflictInfo = parseMkKonversiString(conflictMk);
-      const msg = `Mata kuliah "${targetInfo.nama}" tidak dapat dipilih bersamaan dengan "${conflictInfo.nama}". Sesuai ketentuan kurikulum KLK, mata kuliah berseri/berurutan (seperti Seri I dan Seri II) tidak boleh diambil berpasangan dalam satu usulan KLK.`;
-      setConflictWarningToast(msg);
-      setTimeout(() => setConflictWarningToast(null), 7000);
-      return;
-    }
-
-    // Periksa apakah penambahan mata kuliah ini menyebabkan total akumulasi melebihi 16 SKS
-    const additionalSks = extractSksFromMkKonversi(mkStr);
-    const projectedTotalSks = formTotalSks + additionalSks;
-    if (projectedTotalSks > 16) {
-      const targetInfo = parseMkKonversiString(mkStr);
-      const msg = `Tidak dapat menambahkan "${targetInfo.nama}" (${additionalSks} SKS). Total beban SKS yang sudah Anda pilih saat ini adalah ${formTotalSks} SKS. Jika ditambahkan, totalnya menjadi ${projectedTotalSks} SKS yang melebihi batas maksimal 16 SKS. Silakan kurangi pilihan mata kuliah lainnya terlebih dahulu.`;
+    const checkResult = checkCanSelectMkKonversi(mkStr, formMkKonversiList);
+    if (!checkResult.canSelect) {
+      const msg =
+        checkResult.message ||
+        'Mata kuliah ini tidak dapat dipilih karena tidak memenuhi aturan target kombinasi SKS (4, 7, 10, 13, atau 16 SKS).';
       setConflictWarningToast(msg);
       setTimeout(() => setConflictWarningToast(null), 7000);
       return;
@@ -5069,6 +5561,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
 
   const [formLoAName, setFormLoAName] = useState('');
   const [formSubmittedSuccess, setFormSubmittedSuccess] = useState(false);
+  const [formSubmittedTarget, setFormSubmittedTarget] = useState<'dosen' | 'admin'>('dosen');
 
   // States for Upload Berkas Pengajuan KLK (Surat Lamaran KLK, Proposal PKL atau Magang, CV, Transkrip Nilai)
   interface BerkasPengajuanBaruItem {
@@ -8221,7 +8714,32 @@ ${instansiMitra}
       detailModalKlk.dosenPembimbingKLK &&
       detailModalKlk.dosenPembimbingKLK !== editKlkForm.dosenPembimbingKLK;
 
+    const prevMitraNorm = (detailModalKlk.namaMitra || '').trim().toLowerCase();
+    const nextMitraNorm = (editKlkForm.namaMitra || '').trim().toLowerCase();
+    const isMitraChanged = Boolean(prevMitraNorm && nextMitraNorm && prevMitraNorm !== nextMitraNorm);
+    const isFormSnapshotChanged =
+      isMitraChanged ||
+      detailModalKlk.skema !== editKlkForm.skema ||
+      detailModalKlk.tanggalMulai !== editKlkForm.tanggalMulai ||
+      detailModalKlk.tanggalSelesai !== editKlkForm.tanggalSelesai ||
+      Number(detailModalKlk.sksDiakui) !== Number(editKlkForm.sksDiakui);
+
     let updatedRiwayat = getOrInitRiwayatKlk(detailModalKlk);
+
+    if (isMitraChanged) {
+      const entryChangeMitra: ItemRiwayatKLK = {
+        id: `riwayat-${Date.now()}-changemitra`,
+        waktu: formatTanggalJamWib(),
+        timestamp: Date.now(),
+        role: currentRole === 'super_admin' ? 'Super Admin' : 'Admin',
+        namaAktor: effectiveUser?.nama || (currentRole === 'super_admin' ? 'Super Admin SIKMA' : 'Admin TU Kimia UB'),
+        aksi: 'Perubahan Instansi Mitra KLK',
+        statusHasil: editKlkForm.status,
+        catatan: `Instansi mitra KLK diperbarui dari "${detailModalKlk.namaMitra}" menjadi "${editKlkForm.namaMitra}". Data pengajuan sebelumnya disimpan sebagai arsip di Riwayat Form Pengajuan KLK.`,
+        tahap: 'Perubahan Data Usulan KLK'
+      };
+      updatedRiwayat = [entryChangeMitra, ...updatedRiwayat];
+    }
 
     if (isDpChanged) {
       const entryChangeDp: ItemRiwayatKLK = {
@@ -8238,6 +8756,37 @@ ${instansiMitra}
       updatedRiwayat = [entryChangeDp, ...updatedRiwayat];
     }
 
+    let updatedVersiForm = [...(detailModalKlk.riwayatVersiForm || [])];
+    if (isFormSnapshotChanged) {
+      const archivedSnapshot: RiwayatVersiFormKLK = {
+        id: `${detailModalKlk.id}-v-${Date.now()}`,
+        kodePendaftaran: detailModalKlk.kodePendaftaran,
+        waktuSubmit: detailModalKlk.waktuSubmit || formatTanggalJamWib(),
+        timestamp: Date.now(),
+        skema: detailModalKlk.skema,
+        namaMitra: detailModalKlk.namaMitra,
+        alamatMitra: detailModalKlk.alamatMitra,
+        bidangPekerjaan: detailModalKlk.bidangPekerjaan,
+        mentorIndustri: detailModalKlk.mentorIndustri,
+        tanggalMulai: detailModalKlk.tanggalMulai,
+        tanggalSelesai: detailModalKlk.tanggalSelesai,
+        semester: detailModalKlk.semester,
+        namaSemester: detailModalKlk.namaSemester,
+        sksDiakui: detailModalKlk.sksDiakui,
+        status: detailModalKlk.status,
+        statusVerifikasiDosen: detailModalKlk.statusVerifikasiDosen,
+        statusResponMitra: detailModalKlk.statusResponMitra,
+        dpaNama: detailModalKlk.dpaNama,
+        catatanVerifikasi: detailModalKlk.catatanVerifikasi,
+        catatanVerifikasiDosen: detailModalKlk.catatanVerifikasiDosen,
+        nomorSuratTugas: detailModalKlk.nomorSuratTugas,
+        alasanPerubahan: isMitraChanged
+          ? `Perubahan instansi mitra ke "${editKlkForm.namaMitra}"`
+          : 'Pembaruan data usulan KLK'
+      };
+      updatedVersiForm = [...updatedVersiForm, archivedSnapshot];
+    }
+
     const updatedItem: PengajuanKLK = {
       ...detailModalKlk,
       namaMitra: editKlkForm.namaMitra,
@@ -8252,7 +8801,9 @@ ${instansiMitra}
       kontakMentor: editKlkForm.kontakMentor,
       semester: Number(editKlkForm.semester),
       status: editKlkForm.status,
-      riwayatAktivitas: updatedRiwayat
+      waktuSubmit: isFormSnapshotChanged ? formatTanggalJamWib() : detailModalKlk.waktuSubmit,
+      riwayatAktivitas: updatedRiwayat,
+      riwayatVersiForm: updatedVersiForm
     };
 
     setDetailModalKlk(updatedItem);
@@ -8335,6 +8886,11 @@ ${instansiMitra}
   const [tanggapanSuccessToast, setTanggapanSuccessToast] = useState<boolean>(false);
   const [resetSuccessToast, setResetSuccessToast] = useState<boolean>(false);
 
+  useEffect(() => {
+    setEditingTanggapanLogId(null);
+    setTanggapanInputText('');
+  }, [selectedKlkId, effectiveUser?.id]);
+
   // Selected Student for Tab Bimbingan Dosen (Role Dosen / Admin)
   const [selectedBimbinganKlkId, setSelectedBimbinganKlkId] = useState<string>('');
 
@@ -8351,9 +8907,7 @@ ${instansiMitra}
   const [klkSimulationMode, setKlkSimulationMode] = useState<'normal' | 'belum_daftar' | 'belum_mulai' | 'sudah_mulai'>('normal');
 
   // Selected KLK object
-  const selectedKlk = isMahasiswa
-    ? (roleScopedKlkList.find((k) => k.id === selectedKlkId) || roleScopedKlkList[0] || null)
-    : (roleScopedKlkList.find((k) => k.id === selectedKlkId) || roleScopedKlkList[0] || klkList[0] || null);
+  const selectedKlk = roleScopedKlkList.find((k) => k.id === selectedKlkId) || roleScopedKlkList[0] || null;
 
   // ID Pengajuan KLK yang dipilih secara spesifik via tombol "Lihat Jejak" pada riwayat formulir usulan
   const [submittedKlkIdForForm, setSubmittedKlkIdForForm] = useState<string | null>(() => {
@@ -8396,28 +8950,104 @@ ${instansiMitra}
     });
   }, [klkList, currentStudentData]);
 
+  // Daftar lengkap seluruh versi pengajuan (termasuk riwayat sebelum perubahan mitra / revisi ulang) secara kronologis: Pengajuan ke-1, ke-2, dst.
+  const studentFormHistoryEntries = useMemo(() => {
+    const entries: Array<
+      RiwayatVersiFormKLK & {
+        parentKlkId: string;
+        isArchivedVersion: boolean;
+        nilaiAkhirHuruf?: string;
+        nilaiIndustri?: number;
+      }
+    > = [];
+
+    // Iterasi dari pengajuan paling awal ke pengajuan terbaru
+    const chronologicalItems = [...studentFormHistoryList].reverse();
+    chronologicalItems.forEach((item) => {
+      const versions = Array.isArray(item.riwayatVersiForm) ? item.riwayatVersiForm : [];
+      versions.forEach((v) => {
+        entries.push({
+          ...v,
+          parentKlkId: item.id,
+          isArchivedVersion: true
+        });
+      });
+
+      entries.push({
+        id: item.id,
+        kodePendaftaran: item.kodePendaftaran,
+        waktuSubmit: item.waktuSubmit || '14 Feb 2026, 09:30 WIB',
+        skema: item.skema,
+        namaMitra: item.namaMitra,
+        alamatMitra: item.alamatMitra,
+        bidangPekerjaan: item.bidangPekerjaan,
+        mentorIndustri: item.mentorIndustri,
+        tanggalMulai: item.tanggalMulai,
+        tanggalSelesai: item.tanggalSelesai,
+        semester: item.semester,
+        namaSemester: item.namaSemester,
+        sksDiakui: item.sksDiakui,
+        status: item.status,
+        statusVerifikasiDosen: item.statusVerifikasiDosen,
+        catatanVerifikasi: item.catatanVerifikasi,
+        catatanVerifikasiDosen: item.catatanVerifikasiDosen,
+        nomorSuratTugas: item.nomorSuratTugas,
+        nilaiAkhirHuruf: item.nilaiAkhirHuruf,
+        nilaiIndustri: item.nilaiIndustri,
+        parentKlkId: item.id,
+        isArchivedVersion: false
+      });
+    });
+
+    return entries;
+  }, [studentFormHistoryList]);
+
   const [isSubmittingForm, setIsSubmittingForm] = useState<boolean>(false);
 
-  // Data pengajuan KLK milik mahasiswa yang aktif/terbaru (untuk ringkasan form jika sudah submit)
+  // Bersihkan pilihan form submitted ID jika bukan milik mahasiswa yang sedang login
+  useEffect(() => {
+    if (submittedKlkIdForForm && !studentFormHistoryList.some((k) => k.id === submittedKlkIdForForm)) {
+      setSubmittedKlkIdForForm(null);
+      try {
+        sessionStorage.removeItem('sikma_klk_form_submitted_id');
+      } catch {}
+    }
+  }, [submittedKlkIdForForm, studentFormHistoryList, effectiveUser?.id]);
+
+  // Data pengajuan KLK milik mahasiswa yang aktif/terbaru (strictly scoped ke studentFormHistoryList)
   const latestSubmittedKlk = useMemo(() => {
     if (submittedKlkIdForForm) {
-      const found = klkList.find((k) => k.id === submittedKlkIdForForm);
+      const found = studentFormHistoryList.find((k) => k.id === submittedKlkIdForForm);
       if (found) return found;
     }
     if (studentFormHistoryList.length > 0) {
       return studentFormHistoryList[0];
     }
     return null;
-  }, [submittedKlkIdForForm, klkList, studentFormHistoryList]);
+  }, [submittedKlkIdForForm, studentFormHistoryList]);
 
   // Cek apakah pengajuan mahasiswa saat ini direvisi atau ditolak oleh Dosen atau Admin
   const isFormRevisiOrDitolakByDosenOrAdmin: boolean = useMemo(() => {
     if (!latestSubmittedKlk) return false;
     return (
+      latestSubmittedKlk.statusResponMitra === 'Ditolak' ||
       latestSubmittedKlk.statusVerifikasiDosen === 'Perlu Revisi' ||
       latestSubmittedKlk.statusVerifikasiDosen === 'Ditolak' ||
       latestSubmittedKlk.status === 'Perlu Revisi' ||
       latestSubmittedKlk.status === 'Ditolak'
+    );
+  }, [latestSubmittedKlk]);
+
+  // Cek apakah penolakan/pengembalian berasal khusus dari Admin TU setelah Dosen PA sudah menyetujui (Tahap 3)
+  const isRejectedByAdminOnly: boolean = useMemo(() => {
+    if (!latestSubmittedKlk) return false;
+    const dosenAlreadyApproved =
+      latestSubmittedKlk.statusVerifikasiDosen === 'Disetujui Dosen' ||
+      latestSubmittedKlk.statusVerifikasiDosen === 'Disetujui';
+    return (
+      dosenAlreadyApproved &&
+      (latestSubmittedKlk.status === 'Ditolak' || latestSubmittedKlk.status === 'Perlu Revisi') &&
+      latestSubmittedKlk.statusResponMitra !== 'Ditolak'
     );
   }, [latestSubmittedKlk]);
 
@@ -8426,54 +9056,43 @@ ${instansiMitra}
     return latestSubmittedKlk;
   }, [latestSubmittedKlk]);
 
-  // Menghitung tahap progres kerja KLK riil (1: Mahasiswa Form, 2: Verifikasi Dosen PA, 3: Verifikasi Admin TU)
-  const workflowProgressStep: 1 | 2 | 3 = useMemo(() => {
-    if (!latestSubmittedKlk) return 1;
-    if (isFormRevisiOrDitolakByDosenOrAdmin) return 1;
-    if (
-      latestSubmittedKlk.status === 'Disetujui' ||
-      latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan' ||
-      latestSubmittedKlk.status === 'Selesai & Dinilai'
-    ) {
-      return 3;
-    }
-    if (
-      latestSubmittedKlk.statusVerifikasiDosen === 'Disetujui Dosen' ||
-      latestSubmittedKlk.statusVerifikasiDosen === 'Disetujui' ||
-      latestSubmittedKlk.status === 'Menunggu Persetujuan Dept'
-    ) {
-      return 3;
-    }
-    if (
-      latestSubmittedKlk.statusVerifikasiDosen === 'Menunggu Verifikasi' ||
-      latestSubmittedKlk.status === 'Diproses'
-    ) {
-      return 2;
-    }
-    return 1;
-  }, [latestSubmittedKlk, isFormRevisiOrDitolakByDosenOrAdmin]);
+  // Menghitung status lengkap 8 tahap kerja KLK riil (1..8) berdasarkan kondisi terbaru data KLK
+  const workflowStageStatus = useMemo(
+    () => getKlkWorkflow8StageStatus(latestSubmittedKlk, isFormRevisiOrDitolakByDosenOrAdmin),
+    [latestSubmittedKlk, isFormRevisiOrDitolakByDosenOrAdmin]
+  );
 
-  // Cek apakah seluruh alur pengajuan KLK telah tuntas disetujui
-  const isWorkflowCompletedAll: boolean = useMemo(() => {
-    if (!latestSubmittedKlk) return false;
-    return (
-      latestSubmittedKlk.status === 'Disetujui' ||
-      latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan' ||
-      latestSubmittedKlk.status === 'Selesai & Dinilai'
-    );
-  }, [latestSubmittedKlk]);
+  const workflowProgressStep: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 = workflowStageStatus.currentStage;
 
-  // Step aktif yang sedang dilihat di Tab Form Pengajuan (default mengikuti tahap riil usulan)
-  const [formWorkflowActiveStep, setFormWorkflowActiveStep] = useState<1 | 2 | 3>(1);
+  // Cek apakah seluruh 8 tahap alur kerja KLK telah tuntas selesai (Selesai & Dinilai)
+  const isWorkflowCompletedAll: boolean = workflowStageStatus.isCompletedAll;
 
-  // Otomatis sinkronkan formWorkflowActiveStep saat tahap progres usulan berubah
+  // Step aktif yang sedang dilihat di Tab Form Pengajuan (selalu otomatis tersinkron ke tahap riil 1..8)
+  const [formWorkflowActiveStep, setFormWorkflowActiveStep] = useState<number>(workflowProgressStep);
+
+  // Otomatis sinkronkan formWorkflowActiveStep saat user login atau tahap progres usulan berubah
   useEffect(() => {
     setFormWorkflowActiveStep(workflowProgressStep);
-  }, [workflowProgressStep]);
+  }, [workflowProgressStep, latestSubmittedKlk?.id, effectiveUser?.id]);
 
-  // Jika direvisi atau ditolak oleh Dosen/Admin, muat ulang data pengajuan sebelumnya ke form agar mahasiswa bisa mengedit dan submit ulang
+  // Jika direvisi atau ditolak oleh Dosen/Admin, muat ulang data pengajuan sebelumnya ke form agar mahasiswa bisa mengedit dan submit ulang.
+  // Jika ditolak oleh Perusahaan/Mitra, kosongkan detail mitra agar mahasiswa mengulang pengajuan KLK dari awal.
   useEffect(() => {
     if (isMahasiswa && latestSubmittedKlk && isFormRevisiOrDitolakByDosenOrAdmin) {
+      if (latestSubmittedKlk.statusResponMitra === 'Ditolak') {
+        setFormMitra('');
+        setFormAlamatMitra('');
+        setFormBidangPekerjaan('');
+        setFormTglMulai('');
+        setFormTglSelesai('');
+        setFormMentor('');
+        setFormKontakMentor('');
+        setFormHpPembimbing('');
+        setFormEmailPembimbing('');
+        setFormDeskripsiAlasanKonversi('');
+        return;
+      }
+
       if (latestSubmittedKlk.namaMitra) setFormMitra(latestSubmittedKlk.namaMitra);
       if (latestSubmittedKlk.alamatMitra) setFormAlamatMitra(latestSubmittedKlk.alamatMitra);
       if (latestSubmittedKlk.bidangPekerjaan) setFormBidangPekerjaan(latestSubmittedKlk.bidangPekerjaan);
@@ -8528,7 +9147,7 @@ ${instansiMitra}
           : prev.transkrip_akademik
       }));
     }
-  }, [isMahasiswa, latestSubmittedKlk?.id, isFormRevisiOrDitolakByDosenOrAdmin]);
+  }, [isMahasiswa, latestSubmittedKlk?.id, isFormRevisiOrDitolakByDosenOrAdmin, latestSubmittedKlk?.statusResponMitra]);
 
   // Helper: Mengecek apakah kegiatan KLK sudah resmi dimulai dan logbook/bimbingan terbuka
   const hasStudentStartedKlk = (klk: PengajuanKLK | null | undefined): boolean => {
@@ -8541,17 +9160,15 @@ ${instansiMitra}
       klk.status === 'Selesai & Dinilai';
 
     if (!isApproved) {
-      // Jika status masih 'Diproses', 'Menunggu Persetujuan Dept', 'Draft', atau 'Ditolak'
       return false;
     }
 
-    // 2. Berkas Surat Penerimaan Perusahaan Mitra wajib telah diperiksa dan disetujui Dosen Pembimbing KLK
-    // Sesuai alur: setelah mahasiswa submit berkas dari perusahaan ke dosen pembimbing klk, dosen mengecek dan setuju. Setelah setuju maka logbook dan bimbingan akan terbuka untuk mahasiswa.
-    if (!klk.suratMitraDisetujuiDosen) {
+    // 2. Mahasiswa diterima mitra dan Surat Penerimaan Mitra Wajib sudah disetujui Dosen Pembimbing KLK
+    if (klk.statusResponMitra !== 'Diterima') {
       return false;
     }
 
-    return true;
+    return Boolean(klk.suratMitraDisetujuiDosen);
   };
 
   // Filtered list (untuk tab Data Pengajuan KLK)
@@ -8617,6 +9234,19 @@ ${instansiMitra}
     return Array.from(map.values());
   }, [filteredList]);
 
+  const [klkPengajuanPage, setKlkPengajuanPage] = useState<number>(1);
+  const klkPengajuanItemsPerPage = 10;
+
+  useEffect(() => {
+    setKlkPengajuanPage(1);
+  }, [searchQuery, filterSkema, filterSemester, filterStatus]);
+
+  const totalKlkPengajuanPages = Math.ceil(groupedListByNim.length / klkPengajuanItemsPerPage) || 1;
+  const paginatedGroupedListByNim = useMemo(() => {
+    const start = (klkPengajuanPage - 1) * klkPengajuanItemsPerPage;
+    return groupedListByNim.slice(start, start + klkPengajuanItemsPerPage);
+  }, [groupedListByNim, klkPengajuanPage]);
+
   // Calculate statistics berdasarkan role scope
   const totalAktif = roleScopedKlkList.filter(
     (k) => k.status === 'Disetujui / Sedang Berjalan' || k.status === 'Disetujui'
@@ -8634,26 +9264,26 @@ ${instansiMitra}
     // Pada role mahasiswa, jika form sudah disubmit dan tidak sedang direvisi/ditolak oleh dosen/admin maka tidak dapat diedit atau disubmit kembali
     if (isMahasiswa && latestSubmittedKlk && !isFormRevisiOrDitolakByDosenOrAdmin) return;
     if (!formMitra || !formBidangPekerjaan || !formTglMulai || !formTglSelesai) {
-      alert('Harap isi semua kolom wajib untuk pengajuan KLK.');
+      setConflictWarningToast('Harap lengkapi semua kolom wajib (Nama Mitra, Deskripsi Pekerjaan, serta Tanggal Mulai & Selesai Kegiatan) sebelum mengajukan usulan KLK.');
       return;
     }
 
     if (formMkKonversiList.length === 0) {
-      alert('Silakan pilih minimal 1 usulan mata kuliah konversi.');
+      setConflictWarningToast('Silakan pilih minimal 1 usulan mata kuliah konversi dengan total kombinasi 4, 7, 10, 13, atau 16 SKS.');
       return;
     }
 
     if (hasSerialConflict) {
       const conflictNames = formSerialConflicts.map((c) => c.pairName).join(', ');
-      alert(
+      setConflictWarningToast(
         `Pengajuan tidak dapat diproses karena terdapat mata kuliah berseri yang berpasangan (${conflictNames}). Sesuai ketentuan, mata kuliah berseri (seperti Seri I dan Seri II) tidak boleh diambil secara bersamaan dalam satu pengajuan KLK. Silakan sesuaikan pilihan Anda.`
       );
       return;
     }
 
     if (!TARGET_KOMBINASI_SKS_KLK.includes(formTotalSks as any)) {
-      alert(
-        `Kombinasi total SKS usulan mata kuliah konversi saat ini adalah ${formTotalSks} SKS. Sesuai ketentuan, kombinasi jumlah SKS yang diperbolehkan adalah 4, 7, 10, 13, atau 16 SKS. Silakan sesuaikan pilihan mata kuliah Anda.`
+      setConflictWarningToast(
+        `Kombinasi total SKS usulan mata kuliah konversi saat ini adalah ${formTotalSks} SKS dan tidak dapat disubmit! Mata kuliah konversi yang dipilih hanya boleh memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS (contoh: jumlah pilihan 9 SKS, 12 SKS, atau melebihi 16 SKS tidak dapat disubmit). Silakan sesuaikan pilihan mata kuliah Anda.`
       );
       return;
     }
@@ -8676,6 +9306,7 @@ ${instansiMitra}
       const isRevisiStatus =
         latestSubmittedKlk.statusVerifikasiDosen === 'Perlu Revisi' ||
         latestSubmittedKlk.status === 'Perlu Revisi';
+      const returnDirectlyToAdmin = isRejectedByAdminOnly;
 
       const entryResubmit: ItemRiwayatKLK = {
         id: `riwayat-${Date.now()}-rev`,
@@ -8683,13 +9314,57 @@ ${instansiMitra}
         timestamp: Date.now(),
         role: 'Mahasiswa',
         namaAktor: activeMhsNama,
-        aksi: isRevisiStatus
+        aksi: returnDirectlyToAdmin
+          ? 'Mengirim Ulang Formulir Perbaikan ke Admin TU'
+          : isRevisiStatus
           ? 'Mengirim Ulang Formulir (Hasil Revisi)'
           : 'Mengirim Ulang Formulir (Perbaikan Setelah Ditolak)',
-        statusHasil: 'Diproses',
-        catatan: `Mahasiswa ${activeMhsNama} (${activeMhsNim}) telah memperbarui dan mengirimkan kembali formulir pengajuan KLK skema ${formSkema} di ${formMitra} (${formTotalSks} SKS). Usulan dikirimkan kembali ke Dosen Pembimbing untuk evaluasi.`,
-        tahap: 'Tahap 1: Pengajuan Formulir Usulan KLK'
+        statusHasil: returnDirectlyToAdmin ? 'Menunggu Persetujuan Dept' : 'Diproses',
+        catatan: returnDirectlyToAdmin
+          ? `Mahasiswa ${activeMhsNama} (${activeMhsNim}) telah memperbaiki formulir pengajuan KLK skema ${formSkema} di ${formMitra} (${formTotalSks} SKS) sesuai catatan Admin TU dan mengirimkannya kembali langsung ke Admin TU (Tahap 3) untuk verifikasi ulang.`
+          : `Mahasiswa ${activeMhsNama} (${activeMhsNim}) telah memperbarui dan mengirimkan kembali formulir pengajuan KLK skema ${formSkema} di ${formMitra} (${formTotalSks} SKS). Usulan dikirimkan kembali ke Dosen Pembimbing untuk evaluasi.`,
+        tahap: returnDirectlyToAdmin
+          ? 'Tahap 3: Pengiriman Ulang Perbaikan ke Admin TU'
+          : 'Tahap 1: Pengajuan Formulir Usulan KLK'
       };
+
+      const prevVersionSnapshot: RiwayatVersiFormKLK = {
+        id: `${latestSubmittedKlk.id}-v-${Date.now()}`,
+        kodePendaftaran: latestSubmittedKlk.kodePendaftaran,
+        waktuSubmit: latestSubmittedKlk.waktuSubmit || waktuSubmitLengkap,
+        timestamp: Date.now(),
+        skema: latestSubmittedKlk.skema,
+        namaMitra: latestSubmittedKlk.namaMitra,
+        alamatMitra: latestSubmittedKlk.alamatMitra,
+        bidangPekerjaan: latestSubmittedKlk.bidangPekerjaan,
+        mentorIndustri: latestSubmittedKlk.mentorIndustri,
+        tanggalMulai: latestSubmittedKlk.tanggalMulai,
+        tanggalSelesai: latestSubmittedKlk.tanggalSelesai,
+        semester: latestSubmittedKlk.semester,
+        namaSemester: latestSubmittedKlk.namaSemester,
+        sksDiakui: latestSubmittedKlk.sksDiakui,
+        status: latestSubmittedKlk.status,
+        statusVerifikasiDosen: latestSubmittedKlk.statusVerifikasiDosen,
+        statusResponMitra: latestSubmittedKlk.statusResponMitra,
+        dpaNama: latestSubmittedKlk.dpaNama,
+        catatanVerifikasi: latestSubmittedKlk.catatanVerifikasi,
+        catatanVerifikasiDosen: latestSubmittedKlk.catatanVerifikasiDosen,
+        nomorSuratTugas: latestSubmittedKlk.nomorSuratTugas,
+        alasanPerubahan:
+          latestSubmittedKlk.statusResponMitra === 'Ditolak'
+            ? `Ditolak oleh mitra sebelumnya (${latestSubmittedKlk.namaMitra}) • Diajukan ulang ke "${formMitra}"`
+            : returnDirectlyToAdmin
+            ? (latestSubmittedKlk.namaMitra || '').trim().toLowerCase() !== formMitra.trim().toLowerCase()
+              ? `Ditolak Admin TU • Diperbaiki dengan mitra "${formMitra}" & dikirim kembali ke Admin TU`
+              : 'Ditolak Admin TU • Diperbaiki & dikirim kembali ke Admin TU'
+            : (latestSubmittedKlk.namaMitra || '').trim().toLowerCase() !== formMitra.trim().toLowerCase()
+            ? `Pengajuan ulang & perubahan mitra ke "${formMitra}"`
+            : isRevisiStatus
+            ? 'Revisi & kirim ulang formulir oleh mahasiswa'
+            : 'Perbaikan & kirim ulang setelah penolakan'
+      };
+
+      const wasRejectedByMitra = latestSubmittedKlk.statusResponMitra === 'Ditolak';
 
       const updatedKLK: PengajuanKLK = {
         ...latestSubmittedKlk,
@@ -8714,23 +9389,68 @@ ${instansiMitra}
         dokumenProposal: formBerkasBaruMap.proposal.fileName || latestSubmittedKlk.dokumenProposal,
         dokumenCV: formBerkasBaruMap.cv_mahasiswa.fileName || latestSubmittedKlk.dokumenCV,
         dokumenTranskrip: formBerkasBaruMap.transkrip_akademik.fileName || latestSubmittedKlk.dokumenTranskrip,
-        status: 'Diproses',
-        statusVerifikasiDosen: 'Menunggu Verifikasi',
+        status: returnDirectlyToAdmin ? 'Menunggu Persetujuan Dept' : 'Diproses',
+        statusVerifikasiDosen: returnDirectlyToAdmin
+          ? latestSubmittedKlk.statusVerifikasiDosen
+          : 'Menunggu Verifikasi',
+        statusResponMitra: undefined,
+        waktuResponMitra: undefined,
+        suratLamaranDikirim: undefined,
+        waktuKirimSuratLamaran: undefined,
+        nomorSuratTugas: undefined,
+        suratPengantarTerkirimKeMahasiswa: undefined,
+        waktuKirimSuratPengantarKeMahasiswa: undefined,
+        suratPengantarPengirim: undefined,
+        dokumenSuratBalasanMitra: undefined,
+        nomorSuratBalasanMitra: undefined,
+        tanggalSuratBalasanMitra: undefined,
+        catatanSuratBalasanMitra: undefined,
+        waktuKirimSuratBalasanMitra: undefined,
+        suratBalasanTerkirimKeDosen: undefined,
+        suratMitraDisetujuiDosen: undefined,
+        statusVerifikasiSuratMitraDosen: undefined,
+        catatanVerifikasiSuratMitraDosen: undefined,
+        tanggalVerifikasiSuratMitraDosen: undefined,
+        verifikasiBerkasChecklist: undefined,
         catatanVerifikasi: undefined,
-        catatanVerifikasiDosen: undefined,
-        tanggalVerifikasiDosen: undefined,
-        dosenVerifikatorKLK: undefined,
-        verifikasiAkademikDosen: undefined,
+        catatanVerifikasiDosen: returnDirectlyToAdmin ? latestSubmittedKlk.catatanVerifikasiDosen : undefined,
+        tanggalVerifikasiDosen: returnDirectlyToAdmin ? latestSubmittedKlk.tanggalVerifikasiDosen : undefined,
+        dosenVerifikatorKLK: returnDirectlyToAdmin ? latestSubmittedKlk.dosenVerifikatorKLK : undefined,
+        verifikasiAkademikDosen: returnDirectlyToAdmin ? latestSubmittedKlk.verifikasiAkademikDosen : undefined,
+        dosenPembimbingKLK: wasRejectedByMitra
+          ? (formDosenKLK && formDosenKLK !== 'Belum Ditetapkan' ? formDosenKLK : 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)')
+          : latestSubmittedKlk.dosenPembimbingKLK,
+        isDosenKLKDitetapkanAdmin: wasRejectedByMitra ? false : latestSubmittedKlk.isDosenKLKDitetapkanAdmin,
+        dosenPembimbingKLKDitetapkan: wasRejectedByMitra ? false : latestSubmittedKlk.dosenPembimbingKLKDitetapkan,
         waktuSubmit: waktuSubmitLengkap,
-        riwayatAktivitas: [entryResubmit, ...existingRiwayat]
+        riwayatAktivitas: [entryResubmit, ...existingRiwayat],
+        riwayatVersiForm: [...(latestSubmittedKlk.riwayatVersiForm || []), prevVersionSnapshot]
       };
 
-      // Reset checklist evaluasi akademik dosen agar aktif kembali untuk pengajuan ulang ini
-      setDosenAkademikCheckMap((prev) => {
+      if (!returnDirectlyToAdmin) {
+        resetCustomSuratPengantarForKlk(updatedKLK.id);
+        clearSuratBalasanFile(updatedKLK.id);
+      }
+
+      // Reset checklist evaluasi akademik dosen HANYA jika dikembalikan ke Dosen PA (bukan khusus perbaikan ke Admin TU)
+      if (!returnDirectlyToAdmin) {
+        setDosenAkademikCheckMap((prev) => {
+          const next = { ...prev };
+          delete next[updatedKLK.id];
+          try {
+            localStorage.setItem('sikma_klk_dosen_akademik_check_v1', JSON.stringify(next));
+          } catch {}
+          return next;
+        });
+      }
+
+      // Reset checklist verifikasi berkas Admin agar Admin memeriksa ulang berkas hasil perbaikan
+      setKlkChecklistMap((prev) => {
+        if (!prev[updatedKLK.id]) return prev;
         const next = { ...prev };
         delete next[updatedKLK.id];
         try {
-          localStorage.setItem('sikma_klk_dosen_akademik_check_v1', JSON.stringify(next));
+          localStorage.setItem('sikma_klk_berkas_checklist_v1', JSON.stringify(next));
         } catch {}
         return next;
       });
@@ -8749,6 +9469,7 @@ ${instansiMitra}
       try {
         sessionStorage.setItem('sikma_klk_form_submitted_id', updatedKLK.id);
       } catch {}
+      setFormSubmittedTarget(returnDirectlyToAdmin ? 'admin' : 'dosen');
       setFormSubmittedSuccess(true);
       setTimeout(() => {
         const el = document.getElementById('box-riwayat-klk-mahasiswa');
@@ -8886,6 +9607,7 @@ ${instansiMitra}
     try {
       sessionStorage.setItem('sikma_klk_form_submitted_id', newKLK.id);
     } catch {}
+    setFormSubmittedTarget('dosen');
     setFormSubmittedSuccess(true);
     setTimeout(() => {
       const el = document.getElementById('box-riwayat-klk-mahasiswa');
@@ -9082,11 +9804,11 @@ ${instansiMitra}
     const targetKlk = klkList.find((k) => k.id === klkId);
     if (!targetKlk) return;
 
-    // Otorisasi: Hanya Pembimbing Lapangan (Mentor) dari mahasiswa yang bersangkutan (atau Super Admin) yang berhak melakukan checklist
-    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk);
+    // Otorisasi: HANYA User Eksternal (Pembimbing Lapangan) yang berhak melakukan checklist
+    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk, currentRole);
     if (!isAuthorized) {
       const mentorName = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
-      setMentorToastMessage(`Otorisasi Terbatas: Hanya Pembimbing Lapangan dari mahasiswa yang bersangkutan (${mentorName}) yang mempunyai authorize untuk checklist.`);
+      setMentorToastMessage(`Otorisasi Ditolak: Hanya User Eksternal (Pembimbing Lapangan: ${mentorName}) yang berwenang melakukan checklist absensi.`);
       setMentorToastSuccess(false);
       setTimeout(() => setMentorToastSuccess(false), 4000);
       return;
@@ -9094,7 +9816,7 @@ ${instansiMitra}
 
     const currentAbsens = getOrInitAbsenHarian(targetKlk);
     const nowStr = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
-    const activeMentorNama = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
+    const activeMentorNama = (effectiveUser?.nama || (currentUser as any)?.name) || targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
     
     let isVerifying = true;
     const updatedAbsens = currentAbsens.map((ab) => {
@@ -9141,11 +9863,11 @@ ${instansiMitra}
     const targetKlk = klkList.find((k) => k.id === klkId);
     if (!targetKlk) return;
 
-    // Otorisasi: Hanya Pembimbing Lapangan dari mahasiswa yang bersangkutan (atau Super Admin) yang berhak melakukan checklist
-    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk);
+    // Otorisasi: HANYA User Eksternal (Pembimbing Lapangan) yang berhak melakukan checklist
+    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk, currentRole);
     if (!isAuthorized) {
       const mentorName = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
-      setMentorToastMessage(`Otorisasi Terbatas: Hanya Pembimbing Lapangan dari mahasiswa yang bersangkutan (${mentorName}) yang mempunyai authorize untuk checklist.`);
+      setMentorToastMessage(`Otorisasi Ditolak: Hanya User Eksternal (Pembimbing Lapangan: ${mentorName}) yang berwenang melakukan checklist absensi.`);
       setMentorToastSuccess(false);
       setTimeout(() => setMentorToastSuccess(false), 4000);
       return;
@@ -9153,7 +9875,7 @@ ${instansiMitra}
 
     const currentAbsens = getOrInitAbsenHarian(targetKlk);
     const nowStr = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
-    const activeMentorNama = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
+    const activeMentorNama = (effectiveUser?.nama || (currentUser as any)?.name) || targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
     
     const updatedAbsens = currentAbsens.map((ab, idx) => {
       const itemWeek = ab.mingguKe || (Math.floor(idx / 5) + 1);
@@ -9186,11 +9908,11 @@ ${instansiMitra}
     const targetKlk = klkList.find((k) => k.id === klkId);
     if (!targetKlk) return;
 
-    // Otorisasi: Hanya Pembimbing Lapangan dari mahasiswa yang bersangkutan (atau Super Admin) yang berhak melakukan checklist
-    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk);
+    // Otorisasi: HANYA User Eksternal (Pembimbing Lapangan) yang berhak melakukan checklist
+    const isAuthorized = checkIsMentorForStudent(effectiveUser || currentUser, targetKlk, currentRole);
     if (!isAuthorized) {
       const mentorName = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
-      setMentorToastMessage(`Otorisasi Terbatas: Hanya Pembimbing Lapangan dari mahasiswa yang bersangkutan (${mentorName}) yang mempunyai authorize untuk checklist.`);
+      setMentorToastMessage(`Otorisasi Ditolak: Hanya User Eksternal (Pembimbing Lapangan: ${mentorName}) yang berwenang melakukan checklist absensi.`);
       setMentorToastSuccess(false);
       setTimeout(() => setMentorToastSuccess(false), 4000);
       return;
@@ -9198,7 +9920,7 @@ ${instansiMitra}
 
     const currentAbsens = getOrInitAbsenHarian(targetKlk);
     const nowStr = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' }) + ', ' + new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) + ' WIB';
-    const activeMentorNama = targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
+    const activeMentorNama = (effectiveUser?.nama || (currentUser as any)?.name) || targetKlk.mentorIndustri || 'Pembimbing Lapangan Mitra';
     
     const updatedAbsens = currentAbsens.map((ab) => ({
       ...ab,
@@ -9220,12 +9942,18 @@ ${instansiMitra}
     setTimeout(() => setMentorToastSuccess(false), 3500);
   };
 
-  // Handler: Simpan Tanggapan Akademik Dosen Pembimbing pada Logbook Mingguan
+  // Handler: Simpan Tanggapan Akademik Dosen Pembimbing KLK pada Logbook Mingguan
   const handleSaveTanggapanDosen = (klkId: string, logbookId: string, tanggapanText: string) => {
     const targetKlk = klkList.find((k) => k.id === klkId);
     if (!targetKlk) return;
 
-    const effectiveDosenName = currentUser?.role === 'dosen' ? currentUser.name : (targetKlk.dosenPembimbingKLK || 'Dosen Pembimbing KLK');
+    // Pastikan hanya Dosen Pembimbing KLK yang ditetapkan untuk mahasiswa terkait yang dapat menyimpan tanggapan
+    if (!checkIsDosenPembimbingKlkOnly(effectiveUser || currentUser, targetKlk, dosenList)) {
+      return;
+    }
+
+    const effectiveDosenName =
+      effectiveUser?.nama || (currentUser as any)?.name || targetKlk.dosenPembimbingKLK || 'Dosen Pembimbing KLK';
     const nowStr = new Date().toLocaleDateString('id-ID', { day: '2-digit', month: 'short', year: 'numeric' });
 
     const updatedLogbooks = (targetKlk.logbooks || []).map((lb) => {
@@ -9460,7 +10188,10 @@ ${instansiMitra}
           {canShowFormPengajuanKlk && (
             <button
               id="tab-klk-baru"
-              onClick={() => setSubTab('form-baru')}
+              onClick={() => {
+                setSubTab('form-baru');
+                setFormWorkflowActiveStep(workflowProgressStep);
+              }}
               className={`flex items-center space-x-2 px-4 py-2.5 rounded-lg text-xs font-semibold transition-all ${
                 subTab === 'form-baru'
                   ? 'bg-[#002B49] text-white shadow-sm'
@@ -9587,13 +10318,13 @@ ${instansiMitra}
                   Read Only
                 </span>
               ) : isMahasiswa ? (
-                latestSubmittedKlk?.suratMitraDisetujuiDosen ? (
+                hasStudentStartedKlk(latestSubmittedKlk) ? (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                     Aktif
                   </span>
-                ) : latestSubmittedKlk?.dokumenSuratBalasanMitra || latestSubmittedKlk?.suratBalasanTerkirimKeDosen ? (
+                ) : latestSubmittedKlk?.statusResponMitra === 'Diterima' ? (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
-                    Menunggu Dosen
+                    Upload Surat Mitra
                   </span>
                 ) : (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 flex items-center gap-0.5">
@@ -9627,13 +10358,13 @@ ${instansiMitra}
                 Min. 6 Sesi
               </span>
               {isMahasiswa && (
-                latestSubmittedKlk?.suratMitraDisetujuiDosen ? (
+                hasStudentStartedKlk(latestSubmittedKlk) ? (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
                     Aktif
                   </span>
-                ) : latestSubmittedKlk?.dokumenSuratBalasanMitra || latestSubmittedKlk?.suratBalasanTerkirimKeDosen ? (
+                ) : latestSubmittedKlk?.statusResponMitra === 'Diterima' ? (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-amber-100 text-amber-900 border border-amber-300 animate-pulse">
-                    Menunggu Dosen
+                    Upload Surat Mitra
                   </span>
                 ) : (
                   <span className="ml-1 px-1.5 py-0.2 rounded-full text-[9px] font-bold bg-slate-100 text-slate-500 flex items-center gap-0.5">
@@ -9644,7 +10375,7 @@ ${instansiMitra}
             </button>
           )}
 
-          {!isUserEksternal && (
+          {canShowSeminarNilaiTab && (
             <button
               id="tab-klk-seminar"
               onClick={() => setSubTab('penilaian-seminar')}
@@ -9878,7 +10609,7 @@ ${instansiMitra}
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-200">
-                  {groupedListByNim.map(({ primary: item, count }) => {
+                  {paginatedGroupedListByNim.map(({ primary: item, count }) => {
                     const isSelected = item.id === selectedKlkId;
                     return (
                       <tr
@@ -10056,6 +10787,7 @@ ${instansiMitra}
                             </button>
 
 
+
                             <button
                               id={`btn-logbook-klk-${item.id}`}
                               onClick={() => {
@@ -10142,6 +10874,44 @@ ${instansiMitra}
                 </tbody>
               </table>
             </div>
+
+            {/* Pagination Footer (Limit 10 baris per halaman) */}
+            {groupedListByNim.length > 0 && (
+              <div className="p-3.5 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-600">
+                <div>
+                  Menampilkan <strong className="text-slate-900">{(klkPengajuanPage - 1) * klkPengajuanItemsPerPage + 1}</strong> s.d. <strong className="text-slate-900">{Math.min(klkPengajuanPage * klkPengajuanItemsPerPage, groupedListByNim.length)}</strong> dari <strong className="text-slate-900">{groupedListByNim.length}</strong> data pengajuan KLK
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setKlkPengajuanPage((prev) => Math.max(prev - 1, 1))}
+                    disabled={klkPengajuanPage === 1}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
+                      klkPengajuanPage === 1
+                        ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100 cursor-pointer'
+                    }`}
+                  >
+                    Sebelumnya
+                  </button>
+                  <div className="px-3 py-1.5 bg-white border border-slate-300 rounded-lg font-bold text-xs text-[#002B49]">
+                    Hal. {klkPengajuanPage} dari {totalKlkPengajuanPages}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setKlkPengajuanPage((prev) => Math.min(prev + 1, totalKlkPengajuanPages))}
+                    disabled={klkPengajuanPage >= totalKlkPengajuanPages}
+                    className={`px-3 py-1.5 rounded-lg border text-xs font-bold transition ${
+                      klkPengajuanPage >= totalKlkPengajuanPages
+                        ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100 cursor-pointer'
+                    }`}
+                  >
+                    Selanjutnya
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -10203,12 +10973,14 @@ ${instansiMitra}
             </div>
           )}
 
-          {/* Tracker Urutan Kerja KLK Terpadu (Tahap 3: Admin) */}
+          {/* Tracker Urutan Kerja KLK Terpadu (Admin: Sinkron ke mahasiswa terpilih) */}
           <WorkflowUrutanKlkTracker
-            activeStep={3}
+            activeStep={selectedVerifikasiKlk ? getKlkWorkflow8StageStatus(selectedVerifikasiKlk).currentStage : 3}
+            isCompletedAll={selectedVerifikasiKlk ? getKlkWorkflow8StageStatus(selectedVerifikasiKlk).isCompletedAll : false}
             onNavigate={(targetTab) => setSubTab(targetTab)}
             canAccessDosen={canAccessVerifikasiDosen}
             canAccessAdmin={isSuperAdminOrAdmin}
+            canAccessForm={canShowFormPengajuanKlk}
             onOpenModalAlur={() => {
               setModalAlurTab('8-tahap');
               setModalAlurKlkOpen(true);
@@ -10310,7 +11082,7 @@ ${instansiMitra}
                     </p>
                   </div>
                 ) : (
-                  filteredVerifikasiList.map((item) => {
+                  paginatedVerifikasiList.map((item) => {
                     const isSelected = selectedVerifikasiKlkId === item.id;
                     const waktuSubmitDisplay =
                       item.waktuSubmit ||
@@ -10449,6 +11221,44 @@ ${instansiMitra}
                   })
                 )}
               </div>
+
+              {/* Pagination Footer (Limit 10 mahasiswa per halaman) */}
+              {filteredVerifikasiList.length > 0 && (
+                <div className="p-3 bg-slate-50 border-t border-slate-200 flex flex-col sm:flex-row items-center justify-between gap-2 text-xs text-slate-600 mt-2 rounded-xl">
+                  <div>
+                    Menampilkan <strong className="text-slate-900">{(verifikasiPage - 1) * verifikasiItemsPerPage + 1}</strong> s.d. <strong className="text-slate-900">{Math.min(verifikasiPage * verifikasiItemsPerPage, filteredVerifikasiList.length)}</strong> dari <strong className="text-slate-900">{filteredVerifikasiList.length}</strong> mahasiswa
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setVerifikasiPage((prev) => Math.max(prev - 1, 1))}
+                      disabled={verifikasiPage === 1}
+                      className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition ${
+                        verifikasiPage === 1
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100 cursor-pointer'
+                      }`}
+                    >
+                      Sebelumnya
+                    </button>
+                    <div className="px-2.5 py-1 bg-white border border-slate-300 rounded-lg font-bold text-xs text-[#002B49]">
+                      Hal. {verifikasiPage} dari {totalVerifikasiPages}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setVerifikasiPage((prev) => Math.min(prev + 1, totalVerifikasiPages))}
+                      disabled={verifikasiPage >= totalVerifikasiPages}
+                      className={`px-2.5 py-1 rounded-lg border text-xs font-bold transition ${
+                        verifikasiPage >= totalVerifikasiPages
+                          ? 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed'
+                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100 cursor-pointer'
+                      }`}
+                    >
+                      Selanjutnya
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* ========================================================================= */}
@@ -10791,9 +11601,14 @@ ${instansiMitra}
 
                         <div className="flex flex-col sm:flex-row gap-2 items-stretch sm:items-center">
                           <select
+                            disabled={!isAdminDecisionPanelActive}
                             value={verifikasiDosenPembimbingKlk}
                             onChange={(e) => setVerifikasiDosenPembimbingKlk(e.target.value)}
-                            className="flex-1 p-2.5 bg-white border border-slate-300 rounded-lg text-xs font-bold text-slate-900 focus:ring-2 focus:ring-[#002B49] focus:outline-hidden shadow-2xs"
+                            className={`flex-1 p-2.5 border rounded-lg text-xs font-bold focus:outline-hidden shadow-2xs ${
+                              !isAdminDecisionPanelActive
+                                ? 'bg-slate-100 border-slate-200 text-slate-500 cursor-not-allowed'
+                                : 'bg-white border-slate-300 text-slate-900 focus:ring-2 focus:ring-[#002B49]'
+                            }`}
                           >
                             <optgroup label="Sama Dengan DPA (Dosen Pembimbing Akademik)">
                               {(() => {
@@ -10821,6 +11636,15 @@ ${instansiMitra}
                           {(() => {
                             const isDosenDitetapkan = checkIsDosenKLKDitetapkanAdmin(selectedVerifikasiKlk);
                             const hasChange = verifikasiDosenPembimbingKlk !== (selectedVerifikasiKlk.dosenPembimbingKLK || 'Belum Ditetapkan');
+
+                            if (!isAdminDecisionPanelActive) {
+                              return (
+                                <div className="px-3 py-2 bg-slate-100 border border-slate-300 rounded-lg text-slate-500 text-xs font-bold flex items-center gap-1.5 shrink-0 cursor-not-allowed">
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>{isDosenDitetapkan ? 'Telah Ditetapkan' : 'Terkunci'}</span>
+                                </div>
+                              );
+                            }
 
                             if (!isDosenDitetapkan) {
                               return (
@@ -10963,8 +11787,13 @@ ${instansiMitra}
 
                           <button
                             type="button"
+                            disabled={!isAdminDecisionPanelActive}
                             onClick={() => handleMarkAllDocsValid(selectedVerifikasiKlk)}
-                            className="px-2.5 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white shadow-2xs flex items-center gap-1 cursor-pointer transition-colors"
+                            className={`px-2.5 py-1.5 rounded-lg text-xs font-bold shadow-2xs flex items-center gap-1 transition-colors ${
+                              isAdminDecisionPanelActive
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer'
+                                : 'bg-slate-200 text-slate-400 border border-slate-300 cursor-not-allowed opacity-70'
+                            }`}
                             title="Tandai semua berkas lolos validasi"
                           >
                             <Check className="w-3.5 h-3.5" />
@@ -10973,8 +11802,13 @@ ${instansiMitra}
 
                           <button
                             type="button"
+                            disabled={!isAdminDecisionPanelActive}
                             onClick={() => handleResetDocChecklist(selectedVerifikasiKlk)}
-                            className="px-2 py-1.5 rounded-lg text-xs font-semibold bg-white hover:bg-slate-100 text-slate-600 border border-slate-200 cursor-pointer transition-colors"
+                            className={`px-2 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                              isAdminDecisionPanelActive
+                                ? 'bg-white hover:bg-slate-100 text-slate-600 border-slate-200 cursor-pointer'
+                                : 'bg-slate-100 text-slate-400 border-slate-200 cursor-not-allowed opacity-70'
+                            }`}
                             title="Reset checklist"
                           >
                             Reset
@@ -11102,30 +11936,40 @@ ${instansiMitra}
                               </div>
 
                               {/* KOTAK CHECKLIST PEMERIKSAAN OLEH SUPER ADMIN & ADMIN */}
-                              <div className="bg-slate-50/90 rounded-xl p-3 border border-slate-200 space-y-2.5">
+                              <div className={`rounded-xl p-3 border border-slate-200 space-y-2.5 ${
+                                !isAdminDecisionPanelActive ? 'bg-slate-100/75 opacity-80' : 'bg-slate-50/90'
+                              }`}>
                                 {/* Checklist Utama Validitas Berkas */}
                                 <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                                  <label className={`flex items-center gap-2 select-none ${
+                                    isAdminDecisionPanelActive ? 'cursor-pointer' : 'cursor-not-allowed'
+                                  }`}>
                                     <input
                                       type="checkbox"
+                                      disabled={!isAdminDecisionPanelActive}
                                       checked={docCheck.isValid}
                                       onChange={() => handleToggleDocValid(selectedVerifikasiKlk, doc.key)}
-                                      className="w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer"
+                                      className={`w-4 h-4 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 ${
+                                        isAdminDecisionPanelActive ? 'cursor-pointer' : 'cursor-not-allowed'
+                                      }`}
                                     />
                                     <span className={`text-xs font-bold ${
                                       docCheck.isValid ? 'text-emerald-900' : 'text-slate-800'
                                     }`}>
-                                      Tandai Berkas Valid & Lolos
+                                      Tandai Berkas Valid &amp; Lolos
                                     </span>
                                   </label>
 
                                   <button
                                     type="button"
+                                    disabled={!isAdminDecisionPanelActive}
                                     onClick={() => handleToggleDocValid(selectedVerifikasiKlk, doc.key)}
-                                    className={`px-2 py-0.5 rounded text-[10px] font-bold border cursor-pointer transition-colors ${
-                                      docCheck.isValid
-                                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200'
-                                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100'
+                                    className={`px-2 py-0.5 rounded text-[10px] font-bold border transition-colors ${
+                                      !isAdminDecisionPanelActive
+                                        ? 'bg-slate-200 text-slate-500 border-slate-300 cursor-not-allowed'
+                                        : docCheck.isValid
+                                        ? 'bg-emerald-100 text-emerald-800 border-emerald-300 hover:bg-emerald-200 cursor-pointer'
+                                        : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-100 cursor-pointer'
                                     }`}
                                   >
                                     {docCheck.isValid ? 'Sudah Diperiksa' : 'Klik Centang'}
@@ -11144,17 +11988,22 @@ ${instansiMitra}
                                     return (
                                       <label
                                         key={crit.id}
-                                        className={`flex items-start gap-2 p-1.5 rounded-lg text-[11px] cursor-pointer transition-all border ${
-                                          isCritChecked
-                                            ? 'bg-emerald-50 text-emerald-950 font-semibold border-emerald-200'
-                                            : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200/80'
+                                        className={`flex items-start gap-2 p-1.5 rounded-lg text-[11px] transition-all border ${
+                                          !isAdminDecisionPanelActive
+                                            ? 'bg-slate-50 text-slate-500 border-slate-200 cursor-not-allowed'
+                                            : isCritChecked
+                                            ? 'bg-emerald-50 text-emerald-950 font-semibold border-emerald-200 cursor-pointer'
+                                            : 'bg-white hover:bg-slate-50 text-slate-700 border-slate-200/80 cursor-pointer'
                                         }`}
                                       >
                                         <input
                                           type="checkbox"
+                                          disabled={!isAdminDecisionPanelActive}
                                           checked={isCritChecked}
                                           onChange={() => handleToggleCriterion(selectedVerifikasiKlk, doc.key, crit.id)}
-                                          className="w-3.5 h-3.5 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 cursor-pointer shrink-0"
+                                          className={`w-3.5 h-3.5 mt-0.5 rounded text-emerald-600 focus:ring-emerald-500 border-slate-300 shrink-0 ${
+                                            isAdminDecisionPanelActive ? 'cursor-pointer' : 'cursor-not-allowed'
+                                          }`}
                                         />
                                         <span className="leading-tight select-none">{crit.label}</span>
                                       </label>
@@ -11169,15 +12018,25 @@ ${instansiMitra}
                                     <div className="flex gap-1">
                                       <button
                                         type="button"
+                                        disabled={!isAdminDecisionPanelActive}
                                         onClick={() => handleSetDocCatatan(selectedVerifikasiKlk, doc.key, 'Format dan kelengkapan berkas telah sesuai standar.')}
-                                        className="text-[9px] px-1.5 py-0.2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded cursor-pointer"
+                                        className={`text-[9px] px-1.5 py-0.2 rounded ${
+                                          isAdminDecisionPanelActive
+                                            ? 'bg-slate-200 hover:bg-slate-300 text-slate-700 cursor-pointer'
+                                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        }`}
                                       >
                                         Sesuai
                                       </button>
                                       <button
                                         type="button"
+                                        disabled={!isAdminDecisionPanelActive}
                                         onClick={() => handleSetDocCatatan(selectedVerifikasiKlk, doc.key, 'Mohon lengkapi tanda tangan dan stempel instansi.')}
-                                        className="text-[9px] px-1.5 py-0.2 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded cursor-pointer"
+                                        className={`text-[9px] px-1.5 py-0.2 rounded ${
+                                          isAdminDecisionPanelActive
+                                            ? 'bg-slate-200 hover:bg-slate-300 text-slate-700 cursor-pointer'
+                                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                                        }`}
                                       >
                                         Revisi
                                       </button>
@@ -11185,10 +12044,16 @@ ${instansiMitra}
                                   </div>
                                   <input
                                     type="text"
+                                    disabled={!isAdminDecisionPanelActive}
+                                    readOnly={!isAdminDecisionPanelActive}
                                     value={docCheck.catatan || ''}
                                     onChange={(e) => handleSetDocCatatan(selectedVerifikasiKlk, doc.key, e.target.value)}
-                                    placeholder="Tulis catatan pemeriksaan berkas ini..."
-                                    className="w-full px-2.5 py-1 bg-white border border-slate-200 rounded-lg text-[11px] text-slate-800 placeholder-slate-400 focus:outline-hidden focus:ring-1 focus:ring-[#002B49]"
+                                    placeholder={!isAdminDecisionPanelActive ? 'Catatan berkas terkunci' : 'Tulis catatan pemeriksaan berkas ini...'}
+                                    className={`w-full px-2.5 py-1 border border-slate-200 rounded-lg text-[11px] focus:outline-hidden ${
+                                      !isAdminDecisionPanelActive
+                                        ? 'bg-slate-100 text-slate-500 cursor-not-allowed'
+                                        : 'bg-white text-slate-800 placeholder-slate-400 focus:ring-1 focus:ring-[#002B49]'
+                                    }`}
                                   />
                                 </div>
 
@@ -11270,15 +12135,21 @@ ${instansiMitra}
                     </div>
 
                     {/* 10. PANEL AKSI VERIFIKASI PENGAJUAN KLK (SUPER ADMIN & ADMIN) */}
-                    <div className="p-4 sm:p-5 bg-gradient-to-br from-slate-50 to-blue-50/40 rounded-2xl border-2 border-[#002B49]/30 shadow-xs space-y-4">
+                    <div className={`p-4 sm:p-5 rounded-2xl border-2 shadow-xs space-y-4 transition-all ${
+                      !isAdminDecisionPanelActive
+                        ? 'bg-slate-50/90 border-slate-300'
+                        : 'bg-gradient-to-br from-slate-50 to-blue-50/40 border-[#002B49]/30'
+                    }`}>
                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
                         <div className="flex items-center gap-2.5">
-                          <div className="w-8 h-8 rounded-lg bg-[#002B49] text-[#D4AF37] flex items-center justify-center font-bold">
+                          <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold ${
+                            !isAdminDecisionPanelActive ? 'bg-slate-700 text-[#D4AF37]' : 'bg-[#002B49] text-[#D4AF37]'
+                          }`}>
                             <ShieldCheck className="w-4 h-4" />
                           </div>
                           <div>
                             <h4 className="font-extrabold text-sm text-slate-900">
-                              Keputusan Verifikasi Super Admin & Admin
+                              Keputusan Verifikasi Super Admin &amp; Admin
                             </h4>
                             <p className="text-[11px] text-slate-500">
                               Tentukan status usulan dan berikan catatan resmi kepada mahasiswa (Tahap 3)
@@ -11286,10 +12157,65 @@ ${instansiMitra}
                           </div>
                         </div>
 
-                        <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#002B49] text-white self-start sm:self-auto">
-                          Wewenang Administrator (Tahap 3)
-                        </span>
+                        {isAdminDecisionAlreadySubmitted && !isEditingAdminDecision ? (
+                          <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-slate-700 text-white self-start sm:self-auto flex items-center gap-1.5 shadow-2xs">
+                            <Lock className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <span>Keputusan Telah Disimpan (Terkunci)</span>
+                          </span>
+                        ) : isEditingAdminDecision ? (
+                          <span className="text-[11px] font-extrabold px-2.5 py-0.5 rounded-full bg-blue-600 text-white self-start sm:self-auto flex items-center gap-1.5 shadow-2xs">
+                            <Pencil className="w-3.5 h-3.5" />
+                            <span>Mode Edit Keputusan Aktif</span>
+                          </span>
+                        ) : (
+                          <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-[#002B49] text-white self-start sm:self-auto">
+                            Wewenang Administrator (Tahap 3)
+                          </span>
+                        )}
                       </div>
+
+                      {/* Banner Status Keputusan Admin Sudah Disimpan & Terkunci */}
+                      {isAdminDecisionAlreadySubmitted && !isEditingAdminDecision && (
+                        <div className="p-4 bg-slate-100/90 border-2 border-slate-300 rounded-xl space-y-2.5 shadow-2xs">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <div className="flex items-center gap-2">
+                              <div className="w-7 h-7 rounded-lg bg-slate-700 text-white flex items-center justify-center shrink-0">
+                                <Lock className="w-4 h-4 text-[#D4AF37]" />
+                              </div>
+                              <div>
+                                <p className="font-extrabold text-slate-900 text-xs sm:text-sm">
+                                  Keputusan Verifikasi Admin Telah Disimpan (Form Tidak Dapat Diedit)
+                                </p>
+                                <p className="text-[11px] text-slate-500">
+                                  Klik tombol <strong>Edit Keputusan</strong> di bawah apabila Admin ingin mengubah keputusan atau catatan verifikasi.
+                                </p>
+                              </div>
+                            </div>
+                            <span
+                              className={`px-3 py-1 rounded-full text-xs font-black uppercase tracking-wider self-start sm:self-auto shadow-2xs ${
+                                selectedVerifikasiKlk.status === 'Ditolak'
+                                  ? 'bg-rose-600 text-white'
+                                  : 'bg-emerald-600 text-white'
+                              }`}
+                            >
+                              {selectedVerifikasiKlk.status === 'Ditolak'
+                                ? '✕ Ditolak / Dikembalikan'
+                                : '✓ Disetujui Admin'}
+                            </span>
+                          </div>
+
+                          {selectedVerifikasiKlk.catatanVerifikasi && (
+                            <div className="bg-white p-3 rounded-xl border border-slate-200 text-xs">
+                              <span className="font-bold text-slate-700 text-[11px] block">
+                                Catatan Resmi Verifikasi Admin:
+                              </span>
+                              <p className="italic text-slate-800 mt-0.5 leading-relaxed bg-slate-50 p-2 rounded-lg border border-slate-200">
+                                &ldquo;{selectedVerifikasiKlk.catatanVerifikasi}&rdquo;
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      )}
 
                       {/* Status Info Pemeriksaan Berkas */}
                       {verifiedDocsCount === 4 ? (
@@ -11333,42 +12259,70 @@ ${instansiMitra}
                             type="button"
                             id="btn-verifikasi-teruskan-dosen"
                             data-testid="btn-verifikasi-setujui-admin"
-                            onClick={() => handleUpdateStatusVerifikasi('Disetujui')}
-                            className={`p-3.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2.5 ${
-                              selectedVerifikasiKlk.status === 'Disetujui' ||
-                              selectedVerifikasiKlk.status === 'Disetujui / Sedang Berjalan' ||
-                              selectedVerifikasiKlk.status === 'Selesai & Dinilai'
-                                ? 'bg-[#002B49] text-[#D4AF37] border-[#002B49] ring-2 ring-blue-300 shadow-md'
-                                : 'bg-white hover:bg-blue-50/70 text-[#002B49] border-blue-200 hover:border-[#002B49]'
+                            disabled={!isAdminDecisionPanelActive}
+                            onClick={() => {
+                              setSelectedAdminDecision('Disetujui');
+                              setVerifikasiCatatanError('');
+                            }}
+                            className={`p-3.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-between gap-2.5 ${
+                              !isAdminDecisionPanelActive
+                                ? selectedAdminDecision === 'Disetujui'
+                                  ? 'bg-[#002B49] text-[#D4AF37] border-[#002B49] opacity-90 cursor-not-allowed shadow-xs'
+                                  : 'bg-slate-100 text-slate-400 border-slate-200 opacity-45 cursor-not-allowed'
+                                : selectedAdminDecision === 'Disetujui'
+                                ? 'bg-[#002B49] text-[#D4AF37] border-[#002B49] ring-2 ring-blue-300 shadow-md cursor-pointer'
+                                : 'bg-white hover:bg-blue-50/70 text-[#002B49] border-blue-200 hover:border-[#002B49] cursor-pointer'
                             }`}
                           >
-                            <CheckCircle2 className="w-4 h-4 text-[#D4AF37] shrink-0" />
-                            <div className="text-left">
-                              <div className="font-extrabold text-sm">Setujui &amp; Terbitkan Surat Pengantar &amp; Surat Tugas</div>
-                              <div className="text-[10px] font-normal opacity-85">
-                                Validasi berkas &amp; terbitkan Surat Pengantar Resmi ke Mitra dan Surat Tugas KLK yang langsung dikirimkan ke mahasiswa
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <CheckCircle2 className="w-4 h-4 text-[#D4AF37] shrink-0" />
+                              <div className="text-left">
+                                <div className="font-extrabold text-sm">Setujui &amp; Terbitkan Surat Pengantar &amp; Surat Tugas</div>
+                                <div className="text-[10px] font-normal opacity-85">
+                                  Validasi berkas &amp; terbitkan Surat Pengantar Resmi ke Mitra dan Surat Tugas KLK yang langsung dikirimkan ke mahasiswa
+                                </div>
                               </div>
                             </div>
+                            {!isAdminDecisionPanelActive && selectedAdminDecision === 'Disetujui' && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] bg-white/20 text-[#D4AF37] font-bold flex items-center gap-0.5 shrink-0">
+                                <Lock className="w-2.5 h-2.5" /> Terkunci
+                              </span>
+                            )}
                           </button>
 
                           {/* 2. Kembalikan ke Mahasiswa (Revisi / Tolak) */}
                           <button
                             type="button"
                             id="btn-verifikasi-kembalikan-mahasiswa"
-                            onClick={() => handleUpdateStatusVerifikasi('Ditolak')}
-                            className={`p-3.5 rounded-xl border text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-2.5 ${
-                              selectedVerifikasiKlk.status === 'Ditolak'
-                                ? 'bg-rose-600 text-white border-rose-700 ring-2 ring-rose-300 shadow-md'
-                                : 'bg-white hover:bg-rose-50/70 text-rose-700 border-rose-200 hover:border-rose-400'
+                            disabled={!isAdminDecisionPanelActive}
+                            onClick={() => {
+                              setSelectedAdminDecision('Ditolak');
+                              setVerifikasiCatatanError('');
+                            }}
+                            className={`p-3.5 rounded-xl border text-xs font-bold transition-all flex items-center justify-between gap-2.5 ${
+                              !isAdminDecisionPanelActive
+                                ? selectedAdminDecision === 'Ditolak'
+                                  ? 'bg-rose-600 text-white border-rose-700 opacity-90 cursor-not-allowed shadow-xs'
+                                  : 'bg-slate-100 text-slate-400 border-slate-200 opacity-45 cursor-not-allowed'
+                                : selectedAdminDecision === 'Ditolak'
+                                ? 'bg-rose-600 text-white border-rose-700 ring-2 ring-rose-300 shadow-md cursor-pointer'
+                                : 'bg-white hover:bg-rose-50/70 text-rose-700 border-rose-200 hover:border-rose-400 cursor-pointer'
                             }`}
                           >
-                            <RotateCcw className="w-4 h-4 shrink-0" />
-                            <div className="text-left">
-                              <div className="font-extrabold text-sm">Kembalikan ke Mahasiswa (Revisi / Tolak)</div>
-                              <div className="text-[10px] font-normal opacity-85">
-                                Perlu revisi atau tolak usulan (Wajib menuliskan catatan instruksi verifikasi)
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <RotateCcw className="w-4 h-4 shrink-0" />
+                              <div className="text-left">
+                                <div className="font-extrabold text-sm">Kembalikan ke Mahasiswa (Revisi / Tolak)</div>
+                                <div className="text-[10px] font-normal opacity-85">
+                                  Perlu revisi atau tolak usulan (Wajib menuliskan catatan instruksi verifikasi)
+                                </div>
                               </div>
                             </div>
+                            {!isAdminDecisionPanelActive && selectedAdminDecision === 'Ditolak' && (
+                              <span className="px-1.5 py-0.5 rounded text-[9px] bg-white/20 text-white font-bold flex items-center gap-0.5 shrink-0">
+                                <Lock className="w-2.5 h-2.5" /> Terkunci
+                              </span>
+                            )}
                           </button>
                         </div>
                       </div>
@@ -11378,12 +12332,16 @@ ${instansiMitra}
                         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                           <label className="font-bold text-slate-800 text-xs flex items-center gap-1.5 flex-wrap">
                             <span>Catatan / Alasan Verifikasi:</span>
-                            <span className="text-[11px] font-semibold text-rose-600">
-                              * (Wajib diisi jika usulan dikembalikan ke mahasiswa)
-                            </span>
+                            {isAdminDecisionPanelActive && (
+                              <span className="text-[11px] font-semibold text-rose-600">
+                                * (Wajib diisi jika usulan dikembalikan ke mahasiswa)
+                              </span>
+                            )}
                           </label>
                           <span className="text-[10px] text-slate-400 font-normal">
-                            Dapat dibaca langsung oleh mahasiswa di portal akun
+                            {!isAdminDecisionPanelActive
+                              ? 'Catatan tersimpan resmi dan terkunci bersama keputusan'
+                              : 'Dapat dibaca langsung oleh mahasiswa di portal akun'}
                           </span>
                         </div>
 
@@ -11393,7 +12351,7 @@ ${instansiMitra}
                             <div>
                               <p className="font-bold">{verifikasiCatatanError}</p>
                               <p className="text-[11px] font-normal text-rose-700 mt-0.5">
-                                Berikan penjelasan detail mengenai alasan pengembalian usulan atau bagian dokumen yang perlu diperbaiki mahasiswa sebelum menekan tombol Kembalikan ke Mahasiswa.
+                                Berikan penjelasan detail mengenai alasan pengembalian usulan atau bagian dokumen yang perlu diperbaiki mahasiswa sebelum menyimpan keputusan.
                               </p>
                             </div>
                           </div>
@@ -11402,6 +12360,8 @@ ${instansiMitra}
                         <textarea
                           ref={verifikasiCatatanTextareaRef}
                           rows={3}
+                          disabled={!isAdminDecisionPanelActive}
+                          readOnly={!isAdminDecisionPanelActive}
                           value={verifikasiCatatan}
                           onChange={(e) => {
                             setVerifikasiCatatan(e.target.value);
@@ -11409,31 +12369,255 @@ ${instansiMitra}
                               setVerifikasiCatatanError('');
                             }
                           }}
-                          placeholder="Tuliskan catatan verifikasi, alasan usulan dikembalikan ke mahasiswa, atau instruksi revisi berkas/proposal..."
-                          className={`w-full p-2.5 bg-white border rounded-xl text-xs text-slate-800 focus:outline-hidden transition-all shadow-2xs ${
-                            verifikasiCatatanError
-                              ? 'border-rose-500 ring-2 ring-rose-200 bg-rose-50/20'
-                              : 'border-slate-300 focus:ring-2 focus:ring-[#002B49]'
+                          placeholder={
+                            !isAdminDecisionPanelActive
+                              ? 'Catatan verifikasi Admin telah disimpan dan terkunci...'
+                              : 'Tuliskan catatan verifikasi, alasan usulan dikembalikan ke mahasiswa, atau instruksi revisi berkas/proposal...'
+                          }
+                          className={`w-full p-2.5 border rounded-xl text-xs focus:outline-hidden transition-all shadow-2xs ${
+                            !isAdminDecisionPanelActive
+                              ? 'bg-slate-100 text-slate-600 border-slate-200 cursor-not-allowed'
+                              : verifikasiCatatanError
+                              ? 'border-rose-500 ring-2 ring-rose-200 bg-rose-50/20 text-slate-800'
+                              : 'bg-white border-slate-300 text-slate-800 focus:ring-2 focus:ring-[#002B49]'
                           }`}
                         />
                       </div>
 
-                      {/* Button Simpan Verifikasi */}
+                      {/* Button Simpan Verifikasi & Edit Keputusan */}
                       <div className="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                         <div className="text-[11px] text-slate-500">
-                          Keputusan status akan langsung tercatat dan diperbarui pada data mahasiswa.
+                          {isAdminDecisionAlreadySubmitted && !isEditingAdminDecision ? (
+                            <span className="inline-flex items-center gap-1.5 text-slate-600 font-semibold">
+                              <Lock className="w-3.5 h-3.5 text-slate-400" />
+                              Keputusan telah disimpan. Formulir verifikasi Admin dalam kondisi terkunci.
+                            </span>
+                          ) : (
+                            'Keputusan status akan langsung tercatat dan diperbarui pada data mahasiswa.'
+                          )}
                         </div>
-                        <button
-                          type="button"
-                          id="btn-simpan-keputusan-verifikasi"
-                          onClick={() => handleUpdateStatusVerifikasi(selectedVerifikasiKlk.status, verifikasiCatatan)}
-                          className="px-5 py-2.5 bg-[#002B49] hover:bg-[#003865] active:bg-[#00243d] text-white font-bold rounded-xl text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors shrink-0"
-                        >
-                          <Save className="w-4 h-4 text-[#D4AF37]" />
-                          <span>Simpan Keputusan Verifikasi</span>
-                        </button>
+
+                        <div className="flex items-center gap-2 flex-wrap self-end sm:self-auto">
+                          {isAdminDecisionAlreadySubmitted && !isEditingAdminDecision && (
+                            <button
+                              type="button"
+                              id="btn-edit-keputusan-admin"
+                              onClick={() => {
+                                setIsEditingAdminDecision(true);
+                                setVerifikasiCatatanError('');
+                              }}
+                              className="px-4 py-2.5 font-bold rounded-xl text-xs bg-white hover:bg-slate-100 active:bg-slate-200 text-[#002B49] border border-slate-300 transition-colors shadow-2xs flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Pencil className="w-3.5 h-3.5 text-[#D4AF37]" />
+                              <span>Edit Keputusan</span>
+                            </button>
+                          )}
+
+                          {isEditingAdminDecision && (
+                            <button
+                              type="button"
+                              id="btn-batal-edit-keputusan-admin"
+                              onClick={() => {
+                                setIsEditingAdminDecision(false);
+                                setVerifikasiCatatanError('');
+                                if (selectedVerifikasiKlk) {
+                                  setVerifikasiCatatan(selectedVerifikasiKlk.catatanVerifikasi || '');
+                                  setSelectedAdminDecision(
+                                    selectedVerifikasiKlk.status === 'Ditolak' ? 'Ditolak' : 'Disetujui'
+                                  );
+                                }
+                              }}
+                              className="px-3.5 py-2.5 font-bold rounded-xl text-xs bg-white hover:bg-slate-100 text-slate-600 border border-slate-300 transition-colors shadow-2xs cursor-pointer"
+                            >
+                              Batal
+                            </button>
+                          )}
+
+                          {isAdminDecisionAlreadySubmitted && !isEditingAdminDecision ? (
+                            <button
+                              type="button"
+                              id="btn-simpan-keputusan-verifikasi-locked"
+                              disabled={true}
+                              className="px-5 py-2.5 bg-slate-200 text-slate-500 border border-slate-300 font-bold rounded-xl text-xs cursor-not-allowed flex items-center justify-center gap-2 shrink-0"
+                            >
+                              <Lock className="w-4 h-4 text-slate-400" />
+                              <span>Keputusan Telah Disimpan (Terkunci)</span>
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              id="btn-simpan-keputusan-verifikasi"
+                              onClick={() => handleUpdateStatusVerifikasi(selectedAdminDecision, verifikasiCatatan)}
+                              className="px-5 py-2.5 bg-[#002B49] hover:bg-[#003865] active:bg-[#00243d] text-white font-bold rounded-xl text-xs shadow-sm flex items-center justify-center gap-2 cursor-pointer transition-colors shrink-0"
+                            >
+                              <Save className="w-4 h-4 text-[#D4AF37]" />
+                              <span>
+                                {isEditingAdminDecision ? 'Simpan Perubahan Keputusan' : 'Simpan Keputusan Verifikasi'}
+                              </span>
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
+
+                    {/* 11. DOKUMEN SURAT PENGANTAR KE PERUSAHAAN (ADMIN TU) */}
+                    {(() => {
+                      const jumlahBerkasAttach = countAttachedBerkasForKlk(selectedVerifikasiKlk);
+                      const lampiranLabel = formatJumlahBerkasLampiran(jumlahBerkasAttach);
+                      const dpaSuratName = resolveDosenPAForKlk(selectedVerifikasiKlk, mahasiswaList);
+                      const isApprovedForStudentDelivery =
+                        selectedVerifikasiKlk.status === 'Disetujui' ||
+                        selectedVerifikasiKlk.status === 'Disetujui / Sedang Berjalan' ||
+                        selectedVerifikasiKlk.status === 'Selesai & Dinilai';
+
+                      return (
+                        <div
+                          id="panel-surat-pengantar-admin"
+                          className="p-4 sm:p-5 bg-white rounded-2xl border-2 border-blue-200 shadow-xs space-y-4"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
+                            <div className="flex items-center gap-2.5">
+                              <div className="w-9 h-9 rounded-xl bg-[#002B49] text-[#D4AF37] flex items-center justify-center shrink-0 shadow-2xs">
+                                <FileText className="w-4 h-4" />
+                              </div>
+                              <div>
+                                <h4 className="font-extrabold text-sm text-slate-900">
+                                  Dokumen Surat Pengantar ke Perusahaan / Mitra
+                                </h4>
+                                <p className="text-[11px] text-slate-500">
+                                  Surat pengantar resmi Departemen Kimia UB ber-TTE Kepala Departemen Kimia (otomatis dikirimkan ke akun mahasiswa saat Admin menyetujui pengajuan)
+                                </p>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1.5 flex-wrap self-start sm:self-auto">
+                              {isApprovedForStudentDelivery ? (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                                  <span>Terkirim ke Portal Mahasiswa</span>
+                                </span>
+                              ) : (
+                                <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
+                                  <Clock className="w-3 h-3 text-amber-600" />
+                                  <span>Belum Dikirim (Menunggu Persetujuan Admin)</span>
+                                </span>
+                              )}
+                            </div>
+                          </div>
+
+                          {isApprovedForStudentDelivery ? (
+                            <div className="p-2.5 rounded-xl bg-emerald-50 border border-emerald-200 text-[11px] text-emerald-900 flex items-start gap-2">
+                              <Send className="w-3.5 h-3.5 text-emerald-700 shrink-0 mt-0.5" />
+                              <span>
+                                Surat Pengantar ini telah dikirimkan ke akun mahasiswa <strong>{selectedVerifikasiKlk.mahasiswaNama}</strong> ({selectedVerifikasiKlk.nim})
+                                {selectedVerifikasiKlk.waktuKirimSuratPengantarKeMahasiswa
+                                  ? ` pada ${selectedVerifikasiKlk.waktuKirimSuratPengantarKeMahasiswa}`
+                                  : ''}. Jika Anda mengedit isi surat dan menekan <strong>Simpan Isi Surat</strong>, versi terbaru otomatis tersinkron di portal mahasiswa.
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-200 text-[11px] text-blue-900 flex items-start gap-2">
+                              <Info className="w-3.5 h-3.5 text-[#002B49] shrink-0 mt-0.5" />
+                              <span>
+                                Pratinjau atau sunting isi surat terlebih dahulu bila diperlukan. Begitu Anda memilih <strong>Setujui &amp; Terbitkan Surat Tugas &amp; Surat Pengantar Resmi</strong> dan mengklik <strong>Simpan Keputusan Verifikasi</strong>, dokumen ini akan otomatis dikirimkan ke portal mahasiswa <strong>{selectedVerifikasiKlk.mahasiswaNama}</strong>.
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+                            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                              <div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                  Nomor Surat
+                                </span>
+                                <span className="font-semibold text-slate-500 italic">
+                                  (Dikosongkan — siap diisi sesuai registrasi surat keluar)
+                                </span>
+                              </div>
+                              <div className="grid grid-cols-2 gap-2 pt-1 border-t border-slate-200/80">
+                                <div>
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                    Lampiran
+                                  </span>
+                                  <span className="font-bold text-slate-800">{lampiranLabel}</span>
+                                </div>
+                                <div>
+                                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                    Perihal
+                                  </span>
+                                  <span className="font-bold text-slate-800">
+                                    Permohonan Izin Pelaksanaan KLK
+                                  </span>
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
+                              <div>
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                  Perusahaan / Mitra Tujuan
+                                </span>
+                                <span className="font-bold text-slate-900">
+                                  {selectedVerifikasiKlk.namaMitra}
+                                </span>
+                                <span className="block text-[11px] text-slate-500">
+                                  {selectedVerifikasiKlk.alamatMitra || 'Di Tempat'}
+                                </span>
+                              </div>
+                              <div className="pt-1 border-t border-slate-200/80">
+                                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block">
+                                  Tembusan &amp; Tanda Tangan Elektronik
+                                </span>
+                                <span className="text-[11px] text-slate-700 block">
+                                  Tembusan: <strong>1. Ketua Program Sarjana Kimia</strong>,{' '}
+                                  <strong>2. Dosen PA ({dpaSuratName})</strong>
+                                </span>
+                                <span className="text-[11px] text-[#002B49] font-bold block mt-0.5">
+                                  TTE: Prof. Anna Safitri, S.Si., M.Sc., Ph.D (Kepala Departemen Kimia)
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
+                            <span className="text-[11px] text-slate-500">
+                              Isi surat mencakup identitas lengkap mahasiswa ({selectedVerifikasiKlk.mahasiswaNama} &bull; {selectedVerifikasiKlk.nim}), keperluan KLK, tembusan, dan QR TTE.
+                            </span>
+
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <button
+                                type="button"
+                                id="btn-admin-preview-surat-pengantar"
+                                onClick={() => handleOpenSuratPengantarAdmin(selectedVerifikasiKlk)}
+                                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-50 hover:bg-blue-100 text-[#002B49] border border-blue-200 transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-[#002B49]" />
+                                <span>Lihat &amp; Edit Surat Pengantar</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                id="btn-admin-cetak-surat-pengantar"
+                                onClick={() => handleQuickPrintSuratPengantarAdmin(selectedVerifikasiKlk)}
+                                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                              >
+                                <Printer className="w-3.5 h-3.5 text-[#002B49]" />
+                                <span>Cetak Surat</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                id="btn-admin-download-surat-pengantar"
+                                onClick={() => handleQuickDownloadSuratPengantarAdmin(selectedVerifikasiKlk)}
+                                className="px-4 py-2 rounded-xl text-xs font-bold bg-[#002B49] hover:bg-[#003865] text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-xs"
+                              >
+                                <Download className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Download PDF</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
 
                     {/* Modal/Box Riwayat Aktivitas Pengajuan KLK di Bagian Paling Bawah (Admin) */}
                     <RiwayatAktivitasBox
@@ -12037,15 +13221,22 @@ ${instansiMitra}
                                 </span>
                               </div>
 
-                              <button
-                                type="button"
-                                id="btn-mentor-checklist-all-absen"
-                                onClick={() => handleChecklistAllAbsenMentor(selectedMentorKlk.id)}
-                                className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white rounded-xl text-xs font-bold transition shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
-                              >
-                                <CheckSquare className="w-4 h-4 text-[#D4AF37]" />
-                                <span>Checklist Semua Absensi Valid</span>
-                              </button>
+                              {isUserEksternal ? (
+                                <button
+                                  type="button"
+                                  id="btn-mentor-checklist-all-absen"
+                                  onClick={() => handleChecklistAllAbsenMentor(selectedMentorKlk.id)}
+                                  className="px-4 py-2 bg-emerald-700 hover:bg-emerald-800 active:bg-emerald-900 text-white rounded-xl text-xs font-bold transition shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+                                >
+                                  <CheckSquare className="w-4 h-4 text-[#D4AF37]" />
+                                  <span>Checklist Semua Absensi Valid</span>
+                                </button>
+                              ) : (
+                                <span className="px-3 py-1.5 bg-slate-100 text-slate-500 text-xs font-semibold rounded-xl border border-slate-200 flex items-center gap-1.5 shrink-0">
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Checklist Khusus User Eksternal</span>
+                                </span>
+                              )}
                             </div>
 
                             {/* Daftar Absen Harian Mahasiswa */}
@@ -12145,24 +13336,33 @@ ${instansiMitra}
                                                 {ab.waktuVerifikasi}
                                               </span>
                                             )}
-                                            <button
-                                              type="button"
-                                              onClick={() =>
-                                                handleChecklistAbsenMentor(
-                                                  selectedMentorKlk.id,
-                                                  ab.id,
-                                                  mentorAbsenCatatan[ab.id] || ab.catatanMentor
-                                                )
-                                              }
-                                              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
-                                                isTerverifikasi
-                                                  ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
-                                                  : 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                                              }`}
-                                            >
-                                              <Check className="w-3.5 h-3.5" />
-                                              <span>{isTerverifikasi ? 'Perbarui Verifikasi' : 'Checklist Hadir Valid'}</span>
-                                            </button>
+                                            {isUserEksternal ? (
+                                              <button
+                                                type="button"
+                                                onClick={() =>
+                                                  handleChecklistAbsenMentor(
+                                                    selectedMentorKlk.id,
+                                                    ab.id,
+                                                    mentorAbsenCatatan[ab.id] || ab.catatanMentor
+                                                  )
+                                                }
+                                                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 cursor-pointer shadow-2xs ${
+                                                  isTerverifikasi
+                                                    ? 'bg-slate-200 hover:bg-slate-300 text-slate-800'
+                                                    : 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                                                }`}
+                                              >
+                                                <Check className="w-3.5 h-3.5" />
+                                                <span>{isTerverifikasi ? 'Perbarui Verifikasi' : 'Checklist Hadir Valid'}</span>
+                                              </button>
+                                            ) : (
+                                              <span className={`px-2.5 py-1 rounded-lg text-[11px] font-bold flex items-center gap-1 ${
+                                                isTerverifikasi ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-500'
+                                              }`}>
+                                                {isTerverifikasi ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <Clock className="w-3 h-3 text-slate-400" />}
+                                                <span>{isTerverifikasi ? 'Terverifikasi' : 'Belum Diverifikasi'}</span>
+                                              </span>
+                                            )}
                                           </div>
                                         </div>
                                       </div>
@@ -12565,12 +13765,14 @@ ${instansiMitra}
             </div>
           )}
 
-          {/* Tracker Urutan Kerja KLK Terpadu (Tahap 2: Dosen) */}
+          {/* Tracker Urutan Kerja KLK Terpadu (Dosen: Sinkron ke mahasiswa terpilih) */}
           <WorkflowUrutanKlkTracker
-            activeStep={2}
+            activeStep={selectedDosenKlk ? getKlkWorkflow8StageStatus(selectedDosenKlk).currentStage : 2}
+            isCompletedAll={selectedDosenKlk ? getKlkWorkflow8StageStatus(selectedDosenKlk).isCompletedAll : false}
             onNavigate={(targetTab) => setSubTab(targetTab)}
             canAccessDosen={canAccessVerifikasiDosen}
             canAccessAdmin={isSuperAdminOrAdmin}
+            canAccessForm={canShowFormPengajuanKlk}
             onOpenModalAlur={() => {
               setModalAlurTab('8-tahap');
               setModalAlurKlkOpen(true);
@@ -14037,7 +15239,7 @@ ${instansiMitra}
                               )}
                             </div>
                             <p className="text-[11px] text-slate-500">
-                              Pemeriksaan surat penerimaan resmi instansi mitra. Setelah Dosen Pembimbing KLK setuju, Logbook Mingguan &amp; Bimbingan mahasiswa akan aktif terbuka.
+                              Dokumen surat penerimaan resmi dari perusahaan / instansi mitra yang diunggah mahasiswa (dapat dilihat, diunduh, dan dicetak). Logbook &amp; Bimbingan Dosen langsung terbuka setelah mahasiswa mengunggah surat ini.
                             </p>
                           </div>
                         </div>
@@ -14046,7 +15248,7 @@ ${instansiMitra}
                           {selectedDosenKlk.suratMitraDisetujuiDosen ? (
                             <span className="text-[11px] font-extrabold px-3 py-1 rounded-full bg-emerald-600 text-white flex items-center gap-1.5 shadow-2xs">
                               <CheckCircle2 className="w-3.5 h-3.5" />
-                              <span>Surat Mitra Disetujui (Logbook/Bimbingan Terbuka)</span>
+                              <span>Surat Mitra Terverifikasi</span>
                             </span>
                           ) : selectedDosenKlk.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan' ? (
                             <span className="text-[11px] font-extrabold px-3 py-1 rounded-full bg-amber-500 text-slate-950 flex items-center gap-1.5 shadow-2xs">
@@ -14054,9 +15256,9 @@ ${instansiMitra}
                               <span>Perlu Perbaikan Mahasiswa</span>
                             </span>
                           ) : Boolean(selectedDosenKlk.dokumenSuratBalasanMitra || selectedDosenKlk.suratBalasanTerkirimKeDosen) ? (
-                            <span className="text-[11px] font-extrabold px-3 py-1 rounded-full bg-indigo-600 text-white flex items-center gap-1.5 shadow-2xs animate-pulse">
-                              <Clock className="w-3.5 h-3.5" />
-                              <span>Menunggu Pemeriksaan Dosen</span>
+                            <span className="text-[11px] font-extrabold px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 border border-emerald-300 flex items-center gap-1.5 shadow-2xs">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>Surat Diterima • Logbook Aktif</span>
                             </span>
                           ) : (
                             <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-slate-200 text-slate-600">
@@ -14102,8 +15304,8 @@ ${instansiMitra}
                             </div>
                           </div>
 
-                          {/* Dokumen Lampiran Surat & Tombol Preview */}
-                          <div className="p-3.5 bg-white rounded-xl border border-indigo-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          {/* Dokumen Lampiran Surat & Tombol View / Download / Cetak */}
+                          <div className="p-3.5 bg-white rounded-xl border border-indigo-200 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
                             <div className="flex items-center gap-3 min-w-0">
                               <div className="w-10 h-10 rounded-xl bg-indigo-50 border border-indigo-200 flex items-center justify-center shrink-0">
                                 <FileText className="w-5 h-5 text-indigo-600" />
@@ -14118,24 +15320,38 @@ ${instansiMitra}
                               </div>
                             </div>
 
-                            <button
-                              type="button"
-                              id="btn-preview-surat-mitra-dosen"
-                              onClick={() => {
-                                setPreviewDocData({
-                                  label: 'Surat Penerimaan Perusahaan ke Dosen Pembimbing KLK',
-                                  fileName: selectedDosenKlk.dokumenSuratBalasanMitra || `Surat_Penerimaan_Resmi_${selectedDosenKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
-                                  description: `Surat penerimaan resmi dari ${selectedDosenKlk.namaMitra} (No: ${selectedDosenKlk.nomorSuratBalasanMitra || '-'}) yang ditujukan kepada Dosen Pembimbing KLK (${selectedDosenKlk.dosenPembimbingKLK && !selectedDosenKlk.dosenPembimbingKLK.includes('Belum Ditetapkan') ? selectedDosenKlk.dosenPembimbingKLK : (selectedDosenKlk.dpaNama || 'Dosen Pembimbing KLK')}).`,
-                                  uploadedAt: selectedDosenKlk.waktuKirimSuratBalasanMitra || selectedDosenKlk.waktuSubmit || '14 Feb 2026',
-                                  fileSize: '540 KB',
-                                  category: 'Surat Balasan Mitra'
-                                });
-                              }}
-                              className="px-4 py-2 rounded-xl text-xs font-bold bg-[#002B49] hover:bg-[#003865] text-white transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
-                            >
-                              <Eye className="w-4 h-4 text-[#D4AF37]" />
-                              <span>Lihat / Periksa Berkas Surat Mitra</span>
-                            </button>
+                            <div className="flex items-center gap-2 flex-wrap shrink-0">
+                              <button
+                                type="button"
+                                id="btn-preview-surat-mitra-dosen"
+                                onClick={() => {
+                                  setSuratMitraPreviewMode('auto');
+                                  setSuratMitraPreviewKlk(selectedDosenKlk);
+                                }}
+                                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-[#002B49] hover:bg-[#003865] text-white transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
+                                <span>Lihat Surat</span>
+                              </button>
+                              <button
+                                type="button"
+                                id="btn-download-surat-mitra-dosen"
+                                onClick={() => downloadSuratBalasanMitra(selectedDosenKlk)}
+                                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white transition-all shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5 text-white" />
+                                <span>Download</span>
+                              </button>
+                              <button
+                                type="button"
+                                id="btn-print-surat-mitra-dosen"
+                                onClick={() => printSuratBalasanMitra(selectedDosenKlk)}
+                                className="px-3.5 py-2 rounded-xl text-xs font-bold bg-white hover:bg-slate-100 text-[#002B49] border border-slate-300 transition-all shadow-2xs flex items-center justify-center gap-1.5 cursor-pointer"
+                              >
+                                <Printer className="w-3.5 h-3.5 text-[#002B49]" />
+                                <span>Cetak</span>
+                              </button>
+                            </div>
                           </div>
 
                           {/* Catatan Pengantar dari Mahasiswa jika ada */}
@@ -14331,31 +15547,46 @@ ${instansiMitra}
 
           {/* Tracker Urutan Kerja KLK Terpadu */}
           <WorkflowUrutanKlkTracker
-            activeStep={formWorkflowActiveStep}
+            activeStep={workflowProgressStep}
+            selectedStepOverride={formWorkflowActiveStep}
             isCompletedAll={isWorkflowCompletedAll}
             onOpenModalAlur={() => {
               setModalAlurTab('8-tahap');
               setModalAlurKlkOpen(true);
             }}
             onStepClick={(step) => {
-              setFormWorkflowActiveStep(step as any);
+              setFormWorkflowActiveStep(step);
+              if (step >= 4 && step <= 7) {
+                setTimeout(() => {
+                  const targetId =
+                    step === 4
+                      ? 'banner-surat-pengantar-diterima-mahasiswa'
+                      : step === 5
+                      ? 'section-jawaban-perusahaan'
+                      : 'section-upload-surat-balasan-mitra';
+                  const el = document.getElementById(targetId);
+                  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }, 80);
+              }
             }}
             onNavigate={(targetTab) => {
               if (targetTab === 'verifikasi-pengajuan-dosen' && canAccessVerifikasiDosen) {
                 setSubTab('verifikasi-pengajuan-dosen');
               } else if (targetTab === 'verifikasi-pengajuan' && isSuperAdminOrAdmin) {
                 setSubTab('verifikasi-pengajuan');
+              } else if (targetTab === 'logbook-mingguan') {
+                setSubTab('logbook-mingguan');
               } else {
-                setFormWorkflowActiveStep(
-                  targetTab === 'form-baru' ? 1 : targetTab === 'verifikasi-pengajuan-dosen' ? 2 : 3
-                );
+                setSubTab('form-baru');
+                setFormWorkflowActiveStep(workflowProgressStep >= 4 ? workflowProgressStep : 1);
               }
             }}
             canAccessDosen={canAccessVerifikasiDosen}
             canAccessAdmin={isSuperAdminOrAdmin}
+            canAccessForm={canShowFormPengajuanKlk}
           />
 
-          {formWorkflowActiveStep === 1 && (
+          {(formWorkflowActiveStep === 1 || formWorkflowActiveStep >= 4) && (
             <>
 
           {!isFormBaruUnlocked ? (
@@ -14397,7 +15628,15 @@ ${instansiMitra}
                   <div className="flex items-center space-x-3">
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 flex-shrink-0" />
                     <div>
-                      <strong>Pengajuan KLK Berhasil Didaftarkan!</strong> Berkas usulan telah masuk ke sistem dan dialirkan ke Dosen Pembimbing. Riwayat aktivitas pengajuan kini telah aktif dan tercatat pada kotak di bawah.
+                      {formSubmittedTarget === 'admin' ? (
+                        <>
+                          <strong>Formulir Perbaikan Berhasil Dikirim Kembali ke Admin TU!</strong> Data &amp; berkas perbaikan telah diterima dan langsung masuk ke antrean Verifikasi Admin TU (Tahap 3) tanpa perlu mengulang persetujuan Dosen PA.
+                        </>
+                      ) : (
+                        <>
+                          <strong>Pengajuan KLK Berhasil Didaftarkan!</strong> Berkas usulan telah masuk ke sistem dan dialirkan ke Dosen Pembimbing. Riwayat aktivitas pengajuan kini telah aktif dan tercatat pada kotak di bawah.
+                        </>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
@@ -14458,17 +15697,22 @@ ${instansiMitra}
                         </div>
                       </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 shrink-0 flex-wrap">
                         <span className="text-slate-500 font-medium">Posisi Formulir:</span>
-                        {latestSubmittedKlk.status === 'Disetujui' || latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan' ? (
+                        {latestSubmittedKlk.status === 'Selesai & Dinilai' ? (
                           <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>Disetujui (Surat Tugas Terbit)</span>
+                            <span>{workflowStageStatus.shortStatusLabel}</span>
+                          </span>
+                        ) : latestSubmittedKlk.status === 'Disetujui' || latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan' ? (
+                          <span className="px-3 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
+                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                            <span>{workflowStageStatus.shortStatusLabel}</span>
                           </span>
                         ) : latestSubmittedKlk.statusVerifikasiDosen === 'Disetujui Dosen' ? (
                           <span className="px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-800 border border-blue-300 flex items-center gap-1">
                             <CheckCircle2 className="w-3.5 h-3.5 text-blue-600" />
-                            <span>Disetujui Dosen Pembimbing</span>
+                            <span>{workflowStageStatus.shortStatusLabel}</span>
                           </span>
                         ) : latestSubmittedKlk.statusVerifikasiDosen === 'Perlu Revisi' ? (
                           <span className="px-3 py-1 rounded-full text-xs font-bold bg-amber-100 text-amber-800 border border-amber-300 flex items-center gap-1">
@@ -14484,57 +15728,62 @@ ${instansiMitra}
                       </div>
                     </div>
 
-                    {/* BANNER NOTIFIKASI DARI ADMIN TU (SURAT PENGANTAR & SURAT TUGAS TERBIT) - JIKA BELUM DIKIRIM */}
-                    {!latestSubmittedKlk.suratLamaranDikirim && (latestSubmittedKlk.status === 'Disetujui' || latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan') && (
-                      <div className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-3 shadow-2xs">
-                        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                          <div className="flex items-center gap-2.5">
+                    {/* BANNER NOTIFIKASI DARI ADMIN TU (SURAT PENGANTAR KE MITRA TERBIT) */}
+                    {(latestSubmittedKlk.status === 'Disetujui' ||
+                      latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan' ||
+                      latestSubmittedKlk.status === 'Selesai & Dinilai') && (
+                      <div
+                        id="banner-surat-pengantar-diterima-mahasiswa"
+                        className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-3 shadow-2xs"
+                      >
+                        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                          <div className="flex items-start sm:items-center gap-2.5">
                             <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs">
                               <CheckCircle2 className="w-5 h-5" />
                             </div>
                             <div>
-                              <div className="font-extrabold text-emerald-950 text-xs sm:text-sm">
-                                Pengajuan KLK Disetujui &amp; Surat Pengantar ke Mitra Diterbitkan!
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <div className="font-extrabold text-emerald-950 text-xs sm:text-sm">
+                                  Pengajuan KLK Disetujui &amp; Surat Pengantar ke Mitra Diterbitkan!
+                                </div>
+                                {latestSubmittedKlk.waktuKirimSuratPengantarKeMahasiswa && (
+                                  <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-200/80 text-emerald-950 border border-emerald-300">
+                                    Dikirim Admin TU: {latestSubmittedKlk.waktuKirimSuratPengantarKeMahasiswa}
+                                  </span>
+                                )}
                               </div>
                               <p className="text-[11px] text-emerald-800 mt-0.5">
-                                Admin TU Departemen Kimia FSTeM UB telah menyetujui pendaftaran KLK Anda. Surat Pengantar Resmi ke Mitra dan Surat Tugas KLK (No. {latestSubmittedKlk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'}) telah dikirimkan ke akun Anda.
+                                Admin TU Departemen Kimia FSTeM UB telah menyetujui formulir pengajuan KLK Anda. Dokumen <strong>Surat Pengantar Resmi ke {latestSubmittedKlk.namaMitra}</strong> (ber-TTE Kepala Departemen Kimia UB) telah dikirimkan ke akun Anda untuk dilihat, diunduh PDF, atau dicetak.
                               </p>
                             </div>
                           </div>
-                          <div className="flex items-center gap-2 shrink-0">
+                          <div className="flex items-center gap-2 flex-wrap shrink-0">
                             <button
                               type="button"
-                              onClick={() => {
-                                setPreviewDocData({
-                                  label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
-                                  fileName: `Surat_Pengantar_Resmi_${latestSubmittedKlk.nim}.pdf`,
-                                  description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${latestSubmittedKlk.mahasiswaNama} (${latestSubmittedKlk.nim}) ditujukan kepada Pimpinan Mitra ${latestSubmittedKlk.namaMitra}.`,
-                                  uploadedAt: latestSubmittedKlk.waktuSubmit || '14 Feb 2026',
-                                  fileSize: '480 KB',
-                                  category: 'Surat Resmi Departemen'
-                                });
-                              }}
+                              id="btn-mhs-lihat-surat-pengantar-banner"
+                              onClick={() => handleOpenSuratPengantarMahasiswa(latestSubmittedKlk)}
                               className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
                             >
                               <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                              <span>Cetak Surat Pengantar</span>
+                              <span>Lihat Surat Pengantar</span>
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                setPreviewDocData({
-                                  label: 'Surat Tugas Resmi KLK',
-                                  fileName: `Surat_Tugas_Resmi_${latestSubmittedKlk.nim}.pdf`,
-                                  description: `Surat Tugas Resmi Pelaksanaan KLK No. ${latestSubmittedKlk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'} disahkan oleh Dekan FSTeM & Ketua Departemen Kimia UB.`,
-                                  uploadedAt: latestSubmittedKlk.waktuSubmit || '14 Feb 2026',
-                                  fileSize: '520 KB',
-                                  category: 'Surat Resmi Departemen'
-                                });
-                              }}
-                              className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                              id="btn-mhs-cetak-surat-pengantar-banner"
+                              onClick={() => handleQuickPrintSuratPengantarAdmin(latestSubmittedKlk)}
+                              className="px-3 py-1.5 bg-white hover:bg-slate-100 text-[#002B49] border border-slate-300 rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
                             >
-                              <FileCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
-                              <span>Cetak Surat Tugas</span>
+                              <Printer className="w-3.5 h-3.5 text-[#002B49]" />
+                              <span>Cetak Surat</span>
+                            </button>
+                            <button
+                              type="button"
+                              id="btn-mhs-download-pdf-surat-pengantar-banner"
+                              onClick={() => handleQuickDownloadSuratPengantarAdmin(latestSubmittedKlk)}
+                              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                            >
+                              <Download className="w-3.5 h-3.5 text-white" />
+                              <span>Download PDF</span>
                             </button>
                           </div>
                         </div>
@@ -14598,18 +15847,109 @@ ${instansiMitra}
                           )}
                         </div>
 
-                        {/* Tahap 1: Belum Konfirmasi Mengirim Surat Pengantar */}
-                        {!latestSubmittedKlk.suratLamaranDikirim && (
-                          <div className="p-4 sm:p-5 bg-white rounded-xl border border-blue-200 space-y-4 shadow-xs">
-                            <div className="border-b border-slate-100 pb-3">
-                              <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
-                                <Send className="w-4 h-4 text-[#002B49]" />
-                                <span>Konfirmasi Pengiriman Surat Pengantar Resmi &amp; Penyesuaian Usulan</span>
+                        {/* Tahap 2: Konfirmasi Hasil dari Perusahaan / Mitra (Baru tampil setelah mahasiswa klik 'Saya Sudah Mengirim Surat Pengantar') */}
+                        {latestSubmittedKlk.suratLamaranDikirim && (!latestSubmittedKlk.statusResponMitra || latestSubmittedKlk.statusResponMitra === 'Belum Dikonfirmasi') && (
+                          <div id="section-jawaban-perusahaan" className="p-4 sm:p-5 bg-white rounded-xl border-2 border-amber-400 space-y-4 shadow-sm animate-fade-in">
+                            <div className="flex flex-wrap items-center justify-between gap-2 pb-2.5 border-b border-amber-100">
+                              <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
+                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                                <span>
+                                  Surat Pengantar Dikirimkan pada {latestSubmittedKlk.waktuKirimSuratLamaran || 'Hari ini'}
+                                </span>
                               </div>
-                              <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                                Setelah Surat Pengantar diterbitkan oleh Admin TU, serahkan/kirimkan dokumen tersebut ke pimpinan instansi mitra <strong>{latestSubmittedKlk.namaMitra}</strong>. Sebelum menekan tombol <strong>"Saya Sudah Mengirim Surat Pengantar"</strong>, mohon periksa &amp; konfirmasi apakah terdapat revisi pada Usulan Mata Kuliah Konversi atau Periode Waktu KLK.
+                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
+                                Konfirmasi Jawaban Mitra
+                              </span>
+                            </div>
+
+                            <div className="space-y-1">
+                              <div className="flex items-center gap-2 text-slate-900 font-extrabold text-sm sm:text-base">
+                                <HelpCircle className="w-5 h-5 text-[#002B49] shrink-0" />
+                                <h3>Konfirmasi Hasil dari Perusahaan / Mitra ({latestSubmittedKlk.namaMitra})</h3>
+                              </div>
+                              <p className="text-xs text-slate-600 leading-relaxed pl-7">
+                                Setelah menyerahkan Surat Pengantar ke pimpinan instansi/perusahaan mitra, pilih konfirmasi hasil balasan resmi yang Anda terima. Jika <strong>Diterima</strong>, Anda wajib mengunggah surat penerimaan dari perusahaan ke Dosen Pembimbing KLK untuk membuka Logbook &amp; Bimbingan Dosen. Jika <strong>Ditolak</strong>, Anda akan mengulang pengajuan KLK dari awal.
                               </p>
                             </div>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                              <button
+                                type="button"
+                                id="btn-respon-mitra-diterima"
+                                onClick={() => handleConfirmMitraResponse(latestSubmittedKlk, 'Diterima')}
+                                className="p-4 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border-2 border-emerald-500 text-emerald-950 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-3 shadow-2xs group text-left"
+                              >
+                                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
+                                  <CheckCircle2 className="w-5 h-5" />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <div className="font-extrabold text-sm text-emerald-950 flex items-center gap-1.5">
+                                    <span>Diterima Perusahaan / Mitra</span>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded">Lanjut Upload Surat</span>
+                                  </div>
+                                  <div className="text-[11px] font-medium text-emerald-800 leading-snug">
+                                    Unggah surat penerimaan ke Dosen Pembimbing KLK untuk membuka Logbook &amp; Bimbingan Dosen
+                                  </div>
+                                </div>
+                              </button>
+
+                              <button
+                                type="button"
+                                id="btn-respon-mitra-ditolak"
+                                onClick={() => handleConfirmMitraResponse(latestSubmittedKlk, 'Ditolak')}
+                                className="p-4 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border-2 border-rose-400 text-rose-950 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-3 shadow-2xs group text-left"
+                              >
+                                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
+                                  <XCircle className="w-5 h-5" />
+                                </div>
+                                <div className="space-y-0.5">
+                                  <div className="font-extrabold text-sm text-rose-950 flex items-center gap-1.5">
+                                    <span>Ditolak Perusahaan / Mitra</span>
+                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded">Ulang dari Awal</span>
+                                  </div>
+                                  <div className="text-[11px] font-medium text-rose-800 leading-snug">
+                                    Arsipkan ke riwayat &amp; ulangi pengajuan form KLK baru dari awal
+                                  </div>
+                                </div>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Opsi Tambahan: Penyesuaian MK Konversi / Periode Waktu KLK sebelum konfirmasi */}
+                        {!latestSubmittedKlk.suratLamaranDikirim && (!latestSubmittedKlk.statusResponMitra || latestSubmittedKlk.statusResponMitra === 'Belum Dikonfirmasi') && (
+                          <div className="bg-white rounded-xl border border-blue-200 shadow-2xs overflow-hidden">
+                            <button
+                              type="button"
+                              id="btn-toggle-opsional-revisi-panel"
+                              onClick={() => setIsOpsionalRevisiPanelOpen((prev) => !prev)}
+                              aria-expanded={isOpsionalRevisiPanelOpen}
+                              className="w-full px-4 py-3 cursor-pointer select-none flex items-center justify-between gap-2 text-xs font-bold text-[#002B49] hover:bg-blue-50/50 transition-colors text-left"
+                            >
+                              <span className="flex items-center gap-2">
+                                <Pencil className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                                <span>Opsional: Sesuaikan Usulan MK Konversi / Periode Waktu &amp; Catat Pengiriman Surat Pengantar</span>
+                              </span>
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-slate-500 shrink-0">
+                                <span>{isOpsionalRevisiPanelOpen ? 'Tutup' : 'Buka'}</span>
+                                {isOpsionalRevisiPanelOpen ? (
+                                  <ChevronUp className="w-4 h-4 text-slate-500" />
+                                ) : (
+                                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                                )}
+                              </span>
+                            </button>
+                            {isOpsionalRevisiPanelOpen && (
+                            <div className="p-4 sm:p-5 border-t border-slate-100 space-y-4">
+                              <div className="border-b border-slate-100 pb-3">
+                                <div className="flex items-center gap-2 text-xs font-bold text-blue-900">
+                                  <Send className="w-4 h-4 text-[#002B49]" />
+                                  <span>Penyesuaian Usulan MK Konversi / Periode Waktu KLK</span>
+                                </div>
+                                <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                                  Jika ada penyesuaian rencana mata kuliah konversi atau jadwal pelaksanaan saat mengirim Surat Pengantar ke pimpinan <strong>{latestSubmittedKlk.namaMitra}</strong>, Anda dapat memperbaruinya di bawah ini.
+                                </p>
+                              </div>
 
                             {/* Section 1: Perubahan Usulan MK Konversi */}
                             <div className="p-3.5 bg-slate-50/80 rounded-xl border border-slate-200 space-y-3">
@@ -14671,16 +16011,16 @@ ${instansiMitra}
                                           Total SKS Konversi Terpilih: <span className="text-[#002B49] text-sm">{revisiTotalSks} SKS</span> ({revisiMkList.length} Mata Kuliah)
                                         </div>
                                         <div className="text-[10px] text-slate-500 mt-0.5">
-                                          Pilih paket skema SKS atau sesuaikan centang mata kuliah konversi di bawah secara bebas sama seperti pengajuan baru.
+                                          Wajib memenuhi tepat salah satu target kombinasi: <strong>4, 7, 10, 13, atau 16 SKS</strong> (kombinasi seperti 9 SKS, 12 SKS, atau &gt;16 SKS tidak dapat disimpan/disubmit).
                                         </div>
                                       </div>
                                     </div>
 
                                     <div className="flex items-center gap-1.5 shrink-0">
-                                      {[4, 7, 10, 13, 16].includes(revisiTotalSks) ? (
+                                      {isRevisiKombinasiSksValid ? (
                                         <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-full font-bold text-[10px] flex items-center gap-1">
                                           <Check className="w-3 h-3 text-emerald-600" />
-                                          <span>Sesuai Kombinasi Target ({revisiTotalSks} SKS)</span>
+                                          <span>Sesuai Target Kombinasi ({revisiTotalSks} SKS)</span>
                                         </span>
                                       ) : revisiTotalSks > 16 ? (
                                         <span className="px-2.5 py-1 bg-rose-100 text-rose-800 border border-rose-300 rounded-full font-bold text-[10px] flex items-center gap-1">
@@ -14688,8 +16028,9 @@ ${instansiMitra}
                                           <span>Melebihi Batas 16 SKS!</span>
                                         </span>
                                       ) : (
-                                        <span className="px-2.5 py-1 bg-blue-100 text-blue-900 border border-blue-300 rounded-full font-bold text-[10px]">
-                                          Kombinasi Bebas: {revisiTotalSks} SKS
+                                        <span className="px-2.5 py-1 bg-rose-100 text-rose-800 border border-rose-300 rounded-full font-bold text-[10px] flex items-center gap-1">
+                                          <AlertCircle className="w-3 h-3 text-rose-600" />
+                                          <span>Belum Sesuai: {revisiTotalSks} SKS (Wajib 4, 7, 10, 13, 16 SKS)</span>
                                         </span>
                                       )}
                                     </div>
@@ -14698,7 +16039,7 @@ ${instansiMitra}
                                   {/* Quick Select Preset Paket SKS */}
                                   <div>
                                     <label className="block font-bold text-slate-800 mb-1.5">
-                                      Pilih Rekomendasi Paket SKS (Preset Cepat):
+                                      Pilih Target Kombinasi SKS (4, 7, 10, 13, 16 SKS):
                                     </label>
                                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                                       {([4, 7, 10, 13, 16] as const).map((sks) => (
@@ -14707,7 +16048,7 @@ ${instansiMitra}
                                           type="button"
                                           onClick={() => handleSelectRevisiTargetSksPreset(sks)}
                                           className={`py-2 px-2.5 rounded-lg border text-xs font-bold transition text-center cursor-pointer ${
-                                            revisiTargetSks === sks && revisiTotalSks === sks
+                                            revisiTotalSks === sks
                                               ? 'bg-[#002B49] text-white border-[#002B49] shadow-2xs'
                                               : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
                                           }`}
@@ -14786,17 +16127,20 @@ ${instansiMitra}
                                       filteredRevisiMkList.map((mkStr) => {
                                         const info = parseMkKonversiString(mkStr);
                                         const isSelected = revisiMkList.includes(mkStr);
-                                        const conflictWithSelected = !isSelected
-                                          ? getSerialConflictWith(mkStr, revisiMkList)
-                                          : null;
-                                        const isSerialLocked = Boolean(conflictWithSelected);
-                                        const willExceed16Sks = !isSelected && revisiTotalSks + info.sks > 16;
+                                        const selectCheck: ReturnType<typeof checkCanSelectMkKonversi> = !isSelected
+                                          ? checkCanSelectMkKonversi(mkStr, revisiMkList)
+                                          : { canSelect: true, projectedTotalSks: revisiTotalSks };
+                                        const isSerialLocked = !isSelected && selectCheck.reason === 'serial';
+                                        const willExceed16Sks = !isSelected && selectCheck.reason === 'exceed_16';
+                                        const isUnreachableTarget = !isSelected && selectCheck.reason === 'unreachable_target';
+                                        const isCannotSelect = !isSelected && !selectCheck.canSelect;
 
                                         return (
                                           <div
                                             key={mkStr}
                                             role="checkbox"
                                             aria-checked={isSelected}
+                                            aria-disabled={isCannotSelect}
                                             tabIndex={0}
                                             onClick={() => handleToggleRevisiMkKonversi(mkStr)}
                                             onKeyDown={(e) => {
@@ -14805,14 +16149,15 @@ ${instansiMitra}
                                                 handleToggleRevisiMkKonversi(mkStr);
                                               }
                                             }}
-                                            className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2.5 relative group ${
+                                            title={selectCheck.message || undefined}
+                                            className={`p-2.5 rounded-xl border text-left transition-all flex items-start gap-2.5 relative group ${
                                               isSelected
-                                                ? 'bg-blue-50/80 border-[#002B49] ring-1 ring-[#002B49]/30 shadow-xs'
+                                                ? 'bg-blue-50/80 border-[#002B49] ring-1 ring-[#002B49]/30 shadow-xs cursor-pointer'
                                                 : isSerialLocked
-                                                ? 'bg-amber-50/40 border-amber-200/80 hover:border-amber-300'
-                                                : willExceed16Sks
-                                                ? 'bg-slate-50/60 border-slate-200/80 opacity-60'
-                                                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/80'
+                                                ? 'bg-amber-50/40 border-amber-200/80 opacity-75 cursor-not-allowed'
+                                                : willExceed16Sks || isUnreachableTarget
+                                                ? 'bg-slate-50/70 border-slate-200/80 opacity-60 cursor-not-allowed'
+                                                : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/80 cursor-pointer'
                                             }`}
                                           >
                                             <div className="pt-0.5 shrink-0">
@@ -14822,13 +16167,15 @@ ${instansiMitra}
                                                     ? 'border-[#002B49] bg-white ring-2 ring-[#002B49]/20'
                                                     : isSerialLocked
                                                     ? 'border-amber-400 bg-amber-50'
+                                                    : isCannotSelect
+                                                    ? 'border-slate-300 bg-slate-100'
                                                     : 'border-slate-300 bg-white group-hover:border-slate-400'
                                                 }`}
                                               >
                                                 {isSelected && (
                                                   <div className="w-2 h-2 rounded-full bg-[#002B49]" />
                                                 )}
-                                                {isSerialLocked && !isSelected && (
+                                                {isCannotSelect && !isSelected && (
                                                   <Lock className="w-2 h-2 text-amber-600" />
                                                 )}
                                               </div>
@@ -14842,6 +16189,16 @@ ${instansiMitra}
                                                 <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-blue-100 text-[#002B49]">
                                                   {info.sks} SKS
                                                 </span>
+                                                {willExceed16Sks && (
+                                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                                                    Tidak Dapat Dipilih (&gt;16 SKS)
+                                                  </span>
+                                                )}
+                                                {isUnreachableTarget && (
+                                                  <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-rose-100 text-rose-800 border border-rose-200">
+                                                    Tidak Memenuhi Target SKS
+                                                  </span>
+                                                )}
                                               </div>
                                               <div className="font-bold text-xs text-slate-900 leading-snug mt-1">
                                                 {info.nama}
@@ -14855,6 +16212,21 @@ ${instansiMitra}
                                       })
                                     )}
                                   </div>
+
+                                  {/* Banner Validasi Kombinasi SKS Revisi */}
+                                  {!isRevisiKombinasiSksValid && (
+                                    <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-900 flex items-start gap-2.5">
+                                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                                      <div>
+                                        <div className="font-bold text-rose-950">
+                                          Kombinasi SKS Belum Memenuhi Ketentuan ({revisiTotalSks} SKS) — Tidak Dapat Disimpan / Disubmit
+                                        </div>
+                                        <div className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
+                                          Mata kuliah konversi yang dipilih wajib memenuhi tepat salah satu pilihan target kombinasi: <strong>4 SKS, 7 SKS, 10 SKS, 13 SKS, atau 16 SKS</strong>. Jumlah pilihan seperti <strong>9 SKS</strong>, <strong>12 SKS</strong>, atau melebihi <strong>16 SKS</strong> tidak diperbolehkan dan tombol simpan/submit dinonaktifkan hingga kombinasi SKS sesuai.
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
 
                                   {/* List MK Terpilih Summary */}
                                   {revisiMkList.length > 0 && (
@@ -14923,13 +16295,23 @@ ${instansiMitra}
                                   {/* Button Simpan Perubahan MK Konversi */}
                                   <div className="flex flex-col sm:flex-row items-center justify-between gap-2.5 pt-2 border-t border-amber-300/70">
                                     <div className="text-[11px] text-slate-600">
-                                      Klik <strong className="text-slate-900">&quot;Simpan Perubahan&quot;</strong> untuk memperbarui pilihan mata kuliah konversi dari usulan terdahulu.
+                                      Klik <strong className="text-slate-900">&quot;Simpan Perubahan&quot;</strong> untuk memperbarui pilihan mata kuliah konversi (wajib memenuhi kombinasi 4, 7, 10, 13, atau 16 SKS).
                                     </div>
                                     <button
                                       type="button"
                                       id="btn-simpan-perubahan-mk-konversi"
+                                      disabled={!isRevisiKombinasiSksValid}
                                       onClick={() => handleSaveRevisiMkKonversi(latestSubmittedKlk)}
-                                      className="w-full sm:w-auto px-4.5 py-2.5 bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white rounded-xl text-xs font-extrabold transition shadow-sm flex items-center justify-center gap-2 cursor-pointer shrink-0"
+                                      className={`w-full sm:w-auto px-4.5 py-2.5 rounded-xl text-xs font-extrabold transition shadow-sm flex items-center justify-center gap-2 shrink-0 ${
+                                        isRevisiKombinasiSksValid
+                                          ? 'bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white cursor-pointer'
+                                          : 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-75'
+                                      }`}
+                                      title={
+                                        isRevisiKombinasiSksValid
+                                          ? 'Simpan perubahan mata kuliah konversi'
+                                          : `Tidak dapat disimpan: Total ${revisiTotalSks} SKS belum memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS`
+                                      }
                                     >
                                       <Save className="w-4 h-4 text-[#D4AF37]" />
                                       <span>Simpan Perubahan</span>
@@ -15052,126 +16434,87 @@ ${instansiMitra}
                               <button
                                 type="button"
                                 id="btn-konfirmasi-kirim-surat-lamaran"
+                                disabled={isRevisiMkKonversi && !isRevisiKombinasiSksValid}
                                 onClick={() => handleConfirmSendSuratLamaran(latestSubmittedKlk)}
-                                className="w-full sm:w-auto px-5 py-3 bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white rounded-xl text-xs sm:text-sm font-extrabold transition shadow-md flex items-center justify-center gap-2 cursor-pointer"
+                                className={`w-full sm:w-auto px-5 py-3 rounded-xl text-xs sm:text-sm font-extrabold transition shadow-md flex items-center justify-center gap-2 ${
+                                  isRevisiMkKonversi && !isRevisiKombinasiSksValid
+                                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-75'
+                                    : 'bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white cursor-pointer'
+                                }`}
+                                title={
+                                  isRevisiMkKonversi && !isRevisiKombinasiSksValid
+                                    ? `Tidak dapat disubmit: Total revisi MK Konversi (${revisiTotalSks} SKS) belum memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS`
+                                    : 'Konfirmasi pengiriman surat pengantar ke mitra'
+                                }
                               >
                                 <Send className="w-4.5 h-4.5 text-[#D4AF37]" />
                                 <span>Saya Sudah Mengirim Surat Pengantar</span>
                               </button>
                             </div>
-                          </div>
-                        )}
-
-                        {/* Tahap 2: Aksi Pertanyaan Jawaban Perusahaan (Diterima / Ditolak) */}
-                        {latestSubmittedKlk.suratLamaranDikirim && (!latestSubmittedKlk.statusResponMitra || latestSubmittedKlk.statusResponMitra === 'Belum Dikonfirmasi') && (
-                          <div id="section-jawaban-perusahaan" className="p-4 sm:p-5 bg-white rounded-xl border-2 border-amber-400 space-y-4 shadow-sm animate-fade-in">
-                            <div className="flex items-center justify-between pb-2.5 border-b border-amber-100">
-                              <div className="flex items-center gap-2 text-xs font-bold text-amber-950">
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                                <span>Surat Pengantar Dikirimkan pada {latestSubmittedKlk.waktuKirimSuratLamaran || 'Hari ini'}</span>
-                              </div>
-                              <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                                Menunggu Konfirmasi Jawaban Mitra
-                              </span>
                             </div>
-
-                            <div className="space-y-1">
-                              <div className="flex items-center gap-2 text-slate-900 font-extrabold text-sm sm:text-base">
-                                <HelpCircle className="w-5 h-5 text-[#002B49] shrink-0" />
-                                <h3>Jawaban Perusahaan</h3>
-                              </div>
-                              <p className="text-xs text-slate-600 leading-relaxed pl-7">
-                                Silakan konfirmasi hasil keputusan balasan resmi yang Anda terima dari pihak manajemen instansi / perusahaan mitra (<strong>{latestSubmittedKlk.namaMitra}</strong>):
-                              </p>
-                            </div>
-
-                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
-                              {/* Button Diterima */}
-                              <button
-                                type="button"
-                                id="btn-respon-mitra-diterima"
-                                onClick={() => handleConfirmMitraResponse(latestSubmittedKlk, 'Diterima')}
-                                className="p-4 bg-emerald-50 hover:bg-emerald-100 active:bg-emerald-200 border-2 border-emerald-500 text-emerald-950 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-3 shadow-2xs group text-left"
-                              >
-                                <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
-                                  <CheckCircle2 className="w-5 h-5" />
-                                </div>
-                                <div className="space-y-0.5">
-                                  <div className="font-extrabold text-sm text-emerald-950 flex items-center gap-1.5">
-                                    <span>Diterima</span>
-                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded">Resmi</span>
-                                  </div>
-                                  <div className="text-[11px] font-medium text-emerald-800 leading-snug">
-                                    Mahasiswa diterima di instansi &amp; aktifkan Logbook Mingguan
-                                  </div>
-                                </div>
-                              </button>
-
-                              {/* Button Ditolak */}
-                              <button
-                                type="button"
-                                id="btn-respon-mitra-ditolak"
-                                onClick={() => handleConfirmMitraResponse(latestSubmittedKlk, 'Ditolak')}
-                                className="p-4 bg-rose-50 hover:bg-rose-100 active:bg-rose-200 border-2 border-rose-400 text-rose-950 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-3 shadow-2xs group text-left"
-                              >
-                                <div className="w-9 h-9 rounded-xl bg-rose-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs group-hover:scale-105 transition-transform">
-                                  <XCircle className="w-5 h-5" />
-                                </div>
-                                <div className="space-y-0.5">
-                                  <div className="font-extrabold text-sm text-rose-950 flex items-center gap-1.5">
-                                    <span>Ditolak</span>
-                                    <span className="text-[10px] font-bold px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded">Mengulang</span>
-                                  </div>
-                                  <div className="text-[11px] font-medium text-rose-800 leading-snug">
-                                    Ditolak mitra &amp; simpan riwayat pengajuan secara permanen
-                                  </div>
-                                </div>
-                              </button>
-                            </div>
+                            )}
                           </div>
                         )}
 
                         {/* Tahap 3A: Diterima di Perusahaan -> Upload Surat Balasan ke Dosen Pembimbing & Tab Logbook */}
                         {latestSubmittedKlk.statusResponMitra === 'Diterima' && (
                           <div className="space-y-4 animate-fade-in">
-                            <div className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-3 shadow-2xs">
-                              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                <div className="flex items-center gap-2.5">
-                                  <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs">
-                                    <CheckCircle2 className="w-5 h-5" />
+                            {hasStudentStartedKlk(latestSubmittedKlk) ? (
+                              <div className="p-4 bg-emerald-50 border-2 border-emerald-400 rounded-xl space-y-3 shadow-2xs">
+                                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                                  <div className="flex items-center gap-2.5">
+                                    <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center font-bold shrink-0 shadow-2xs">
+                                      <CheckCircle2 className="w-5 h-5" />
+                                    </div>
+                                    <div>
+                                      <div className="font-extrabold text-emerald-950 text-xs sm:text-sm">
+                                        Surat Perusahaan Terunggah — Logbook Mingguan &amp; Bimbingan Dosen Kini Terbuka!
+                                      </div>
+                                      <p className="text-[11px] text-emerald-800 mt-0.5">
+                                        Anda telah mengunggah Surat Penerimaan dari <strong>{latestSubmittedKlk.namaMitra}</strong> ke Dosen Pembimbing KLK. Akses Logbook Mingguan dan Bimbingan Dosen sekarang resmi aktif.
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="flex items-center gap-2 flex-wrap shrink-0">
+                                    <button
+                                      type="button"
+                                      id="btn-goto-tab-logbook-mhs"
+                                      onClick={() => setSubTab('logbook-mingguan')}
+                                      className="px-3.5 py-2 bg-[#002B49] hover:bg-[#003865] text-white rounded-xl text-xs font-extrabold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                                    >
+                                      <Clock className="w-4 h-4 text-[#D4AF37]" />
+                                      <span>Ke Tab Logbook Mingguan &rarr;</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      id="btn-goto-tab-bimbingan-mhs"
+                                      onClick={() => setSubTab('bimbingan-dosen')}
+                                      className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-extrabold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
+                                    >
+                                      <UserCheck className="w-4 h-4 text-[#D4AF37]" />
+                                      <span>Ke Tab Bimbingan Dosen &rarr;</span>
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="p-4 bg-amber-50 border-2 border-amber-400 rounded-xl space-y-2 shadow-2xs">
+                                <div className="flex items-start gap-2.5">
+                                  <div className="w-9 h-9 rounded-xl bg-amber-500 text-slate-950 flex items-center justify-center font-bold shrink-0 shadow-2xs">
+                                    <Lock className="w-5 h-5" />
                                   </div>
                                   <div>
-                                    <div className="font-extrabold text-emerald-950 text-xs sm:text-sm">
-                                      Selamat! Anda Resmi Diterima KLK di {latestSubmittedKlk.namaMitra}
+                                    <div className="font-extrabold text-amber-950 text-xs sm:text-sm">
+                                      Diterima di {latestSubmittedKlk.namaMitra} — Wajib Upload Surat Perusahaan untuk Membuka Logbook &amp; Bimbingan Dosen
                                     </div>
-                                    <p className="text-[11px] text-emerald-800 mt-0.5">
-                                      Akses pengisian Logbook Mingguan KLK dan konsultasi Bimbingan Dosen kini telah aktif untuk Anda.
+                                    <p className="text-[11px] text-amber-900 mt-0.5 leading-relaxed">
+                                      Tab <strong>Logbook Mingguan</strong> dan <strong>Bimbingan Dosen</strong> masih terkunci. Silakan unggah &amp; kirimkan dokumen <strong>Surat Penerimaan dari Perusahaan / Mitra</strong> ke Dosen Pembimbing KLK di bawah ini agar Logbook dan Bimbingan Dosen otomatis terbuka.
                                     </p>
                                   </div>
                                 </div>
-
-                                <div className="flex items-center gap-2 flex-wrap shrink-0">
-                                  <button
-                                    type="button"
-                                    id="btn-goto-tab-logbook-mhs"
-                                    onClick={() => setSubTab('logbook-mingguan')}
-                                    className="px-3.5 py-2 bg-[#002B49] hover:bg-[#003865] text-white rounded-xl text-xs font-extrabold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
-                                  >
-                                    <Clock className="w-4 h-4 text-[#D4AF37]" />
-                                    <span>Ke Tab Logbook Mingguan &rarr;</span>
-                                  </button>
-                                  <button
-                                    type="button"
-                                    id="btn-goto-tab-bimbingan-mhs"
-                                    onClick={() => setSubTab('bimbingan-dosen')}
-                                    className="px-3.5 py-2 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-extrabold transition shadow-2xs cursor-pointer flex items-center gap-1.5"
-                                  >
-                                    <UserCheck className="w-4 h-4 text-[#D4AF37]" />
-                                    <span>Ke Tab Bimbingan Dosen &rarr;</span>
-                                  </button>
-                                </div>
                               </div>
-                            </div>
+                            )}
 
                             {/* MODUL UPLOAD SURAT DARI PERUSAHAAN / INSTANSI KE DOSEN PEMBIMBING KLK */}
                             <div
@@ -15202,7 +16545,7 @@ ${instansiMitra}
                                 {latestSubmittedKlk.suratBalasanTerkirimKeDosen && !isEditingSuratBalasan ? (
                                   <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1.5 shrink-0">
                                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                                    <span>Surat Terkirim ke Dosen Pembimbing</span>
+                                    <span>Terkirim ke Dosen Pembimbing</span>
                                   </span>
                                 ) : (
                                   <span className="px-3 py-1 rounded-full text-[11px] font-extrabold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1.5 shrink-0">
@@ -15254,13 +16597,13 @@ ${instansiMitra}
                                     </div>
                                   </div>
 
-                                  <div className="p-3.5 bg-white rounded-lg border border-emerald-200 shadow-2xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                    <div className="flex items-center gap-2.5">
+                                  <div className="p-3.5 bg-white rounded-lg border border-emerald-200 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+                                    <div className="flex items-center gap-2.5 min-w-0">
                                       <div className="w-8 h-8 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold shrink-0">
                                         <FileText className="w-4.5 h-4.5 text-emerald-700" />
                                       </div>
-                                      <div>
-                                        <div className="font-extrabold text-xs text-slate-900">
+                                      <div className="min-w-0">
+                                        <div className="font-extrabold text-xs text-slate-900 truncate">
                                           {latestSubmittedKlk.dokumenSuratBalasanMitra || `Surat_Penerimaan_Resmi_${latestSubmittedKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
                                         </div>
                                         <div className="text-[10px] text-slate-500 mt-0.5">
@@ -15269,25 +16612,36 @@ ${instansiMitra}
                                       </div>
                                     </div>
 
-                                    <div className="flex items-center gap-2 shrink-0">
+                                    <div className="flex items-center gap-2 flex-wrap shrink-0">
                                       <button
                                         type="button"
+                                        id="btn-mhs-view-surat-mitra"
                                         onClick={() => {
-                                          setPreviewDocData({
-                                            label: 'Surat Penerimaan Perusahaan ke Dosen Pembimbing KLK',
-                                            fileName:
-                                              latestSubmittedKlk.dokumenSuratBalasanMitra ||
-                                              `Surat_Penerimaan_Resmi_${latestSubmittedKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
-                                            description: `Surat Balasan / Penerimaan resmi dari instansi mitra ${latestSubmittedKlk.namaMitra} (No: ${latestSubmittedKlk.nomorSuratBalasanMitra || '-'}) yang ditujukan kepada Dosen Pembimbing KLK.`,
-                                            uploadedAt: latestSubmittedKlk.waktuKirimSuratBalasanMitra || '14 Feb 2026',
-                                            fileSize: '540 KB',
-                                            category: 'Surat Balasan Mitra'
-                                          });
+                                          setSuratMitraPreviewMode('auto');
+                                          setSuratMitraPreviewKlk(latestSubmittedKlk);
                                         }}
                                         className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg font-bold text-xs cursor-pointer transition shadow-2xs flex items-center gap-1.5"
                                       >
                                         <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                                        <span>Preview Surat</span>
+                                        <span>Lihat Surat</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        id="btn-mhs-download-surat-mitra"
+                                        onClick={() => downloadSuratBalasanMitra(latestSubmittedKlk)}
+                                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-xs cursor-pointer transition shadow-2xs flex items-center gap-1.5"
+                                      >
+                                        <Download className="w-3.5 h-3.5 text-white" />
+                                        <span>Download</span>
+                                      </button>
+                                      <button
+                                        type="button"
+                                        id="btn-mhs-cetak-surat-mitra"
+                                        onClick={() => printSuratBalasanMitra(latestSubmittedKlk)}
+                                        className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-[#002B49] rounded-lg font-bold text-xs cursor-pointer transition flex items-center gap-1.5"
+                                      >
+                                        <Printer className="w-3.5 h-3.5 text-[#002B49]" />
+                                        <span>Cetak</span>
                                       </button>
                                       <button
                                         type="button"
@@ -15305,7 +16659,7 @@ ${instansiMitra}
                                   <div className="p-3 bg-blue-50/80 border border-blue-200 rounded-xl flex items-start gap-2.5 text-xs text-blue-900 leading-relaxed">
                                     <Info className="w-4 h-4 text-[#002B49] shrink-0 mt-0.5" />
                                     <div>
-                                      Mahasiswa yang resmi diterima wajib mengunggah Surat Penerimaan / Surat Balasan dari instansi mitra (<strong>{latestSubmittedKlk.namaMitra}</strong>) yang ditujukan kepada <strong>Dosen Pembimbing KLK</strong> ({latestSubmittedKlk.dosenPembimbingKLK && latestSubmittedKlk.dosenPembimbingKLK !== 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)' ? latestSubmittedKlk.dosenPembimbingKLK : (latestSubmittedKlk.dpaNama || 'Dosen Pembimbing KLK')}). Dokumen ini dapat diakses langsung oleh Dosen Pembimbing KLK.
+                                      Mahasiswa yang resmi diterima wajib mengunggah Surat Penerimaan / Surat Balasan dari instansi mitra (<strong>{latestSubmittedKlk.namaMitra}</strong>) yang ditujukan kepada <strong>Dosen Pembimbing KLK</strong> ({latestSubmittedKlk.dosenPembimbingKLK && latestSubmittedKlk.dosenPembimbingKLK !== 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)' ? latestSubmittedKlk.dosenPembimbingKLK : (latestSubmittedKlk.dpaNama || 'Dosen Pembimbing KLK')}). Dokumen ini dapat dilihat, diunduh, dan dicetak langsung oleh Mahasiswa maupun Dosen Pembimbing KLK.
                                     </div>
                                   </div>
 
@@ -15341,21 +16695,21 @@ ${instansiMitra}
                                     </label>
                                     <div className="p-4 bg-slate-50 border-2 border-dashed border-emerald-400 rounded-xl hover:bg-slate-100/70 transition space-y-2">
                                       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                                        <div className="flex items-center gap-3">
+                                        <div className="flex items-center gap-3 min-w-0">
                                           <div className="w-10 h-10 rounded-xl bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold shrink-0">
                                             <FileUp className="w-5 h-5 text-emerald-700" />
                                           </div>
-                                          <div>
-                                            <div className="text-xs font-extrabold text-slate-900">
+                                          <div className="min-w-0">
+                                            <div className="text-xs font-extrabold text-slate-900 truncate">
                                               {suratBalasanFileName || `Surat_Penerimaan_Resmi_${latestSubmittedKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`}
                                             </div>
                                             <div className="text-[11px] text-slate-500">
-                                              {suratBalasanFile ? `${(suratBalasanFile.size / 1024).toFixed(1)} KB` : 'Format: PDF, DOCX, PNG, JPG (Maks. 5 MB)'}
+                                              {suratBalasanFile ? `${(suratBalasanFile.size / 1024).toFixed(1)} KB • Siap dikirim & dapat dilihat/unduh/cetak` : 'Format: PDF, DOCX, PNG, JPG (Maks. 5 MB)'}
                                             </div>
                                           </div>
                                         </div>
 
-                                        <div className="flex items-center gap-2">
+                                        <div className="flex items-center gap-2 flex-wrap">
                                           <label className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003865] text-white rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 shadow-2xs">
                                             <Upload className="w-3.5 h-3.5 text-[#D4AF37]" />
                                             <span>Pilih Berkas...</span>
@@ -15368,6 +16722,26 @@ ${instansiMitra}
                                                   const file = e.target.files[0];
                                                   setSuratBalasanFile(file);
                                                   setSuratBalasanFileName(file.name);
+                                                  setSuratBalasanFileMime(file.type || '');
+                                                  setIsReadingSuratBalasanFile(true);
+                                                  const reader = new FileReader();
+                                                  reader.onload = () => {
+                                                    if (typeof reader.result === 'string') {
+                                                      setSuratBalasanFileDataUrl(reader.result);
+                                                      saveSuratBalasanFile(latestSubmittedKlk.id, {
+                                                        fileName: file.name,
+                                                        mimeType: file.type || 'application/pdf',
+                                                        dataUrl: reader.result,
+                                                        sizeBytes: file.size,
+                                                        uploadedAt: formatTanggalJamWib()
+                                                      });
+                                                    }
+                                                    setIsReadingSuratBalasanFile(false);
+                                                  };
+                                                  reader.onerror = () => {
+                                                    setIsReadingSuratBalasanFile(false);
+                                                  };
+                                                  reader.readAsDataURL(file);
                                                 }
                                               }}
                                             />
@@ -15375,15 +16749,24 @@ ${instansiMitra}
                                           <button
                                             type="button"
                                             onClick={() => {
-                                              setPreviewDocData({
-                                                label: 'Draft Surat Penerimaan Perusahaan ke Dosen Pembimbing KLK',
-                                                fileName:
+                                              if (suratBalasanFileDataUrl) {
+                                                saveSuratBalasanFile(latestSubmittedKlk.id, {
+                                                  fileName:
+                                                    suratBalasanFileName ||
+                                                    `Surat_Penerimaan_Resmi_${latestSubmittedKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
+                                                  mimeType: suratBalasanFileMime || suratBalasanFile?.type || 'application/pdf',
+                                                  dataUrl: suratBalasanFileDataUrl
+                                                });
+                                              }
+                                              setSuratMitraPreviewMode('auto');
+                                              setSuratMitraPreviewKlk({
+                                                ...latestSubmittedKlk,
+                                                dokumenSuratBalasanMitra:
                                                   suratBalasanFileName ||
                                                   `Surat_Penerimaan_Resmi_${latestSubmittedKlk.namaMitra.replace(/[^a-zA-Z0-9]/g, '_')}.pdf`,
-                                                description: `Pratinjau dokumen surat penerimaan resmi dari ${latestSubmittedKlk.namaMitra} yang ditujukan kepada Dosen Pembimbing KLK.`,
-                                                uploadedAt: 'Hari ini',
-                                                fileSize: '512 KB',
-                                                category: 'Surat Balasan Mitra'
+                                                nomorSuratBalasanMitra: suratBalasanNomor || latestSubmittedKlk.nomorSuratBalasanMitra,
+                                                tanggalSuratBalasanMitra: suratBalasanTanggal || latestSubmittedKlk.tanggalSuratBalasanMitra,
+                                                catatanSuratBalasanMitra: suratBalasanCatatan || latestSubmittedKlk.catatanSuratBalasanMitra
                                               });
                                             }}
                                             className="px-3 py-1.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5"
@@ -15411,7 +16794,7 @@ ${instansiMitra}
 
                                   <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2 border-t border-slate-200">
                                     <div className="text-[11px] text-slate-500">
-                                      Dokumen ini akan diteruskan ke portal pembimbingan <strong>{latestSubmittedKlk.dosenPembimbingKLK && latestSubmittedKlk.dosenPembimbingKLK !== 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)' ? latestSubmittedKlk.dosenPembimbingKLK : (latestSubmittedKlk.dpaNama || 'Dosen Pembimbing KLK')}</strong>.
+                                      Setelah diklik kirim, dokumen diteruskan ke <strong>{latestSubmittedKlk.dosenPembimbingKLK && latestSubmittedKlk.dosenPembimbingKLK !== 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)' ? latestSubmittedKlk.dosenPembimbingKLK : (latestSubmittedKlk.dpaNama || 'Dosen Pembimbing KLK')}</strong> dan akses <strong>Logbook &amp; Bimbingan Dosen langsung terbuka</strong>.
                                     </div>
 
                                     <div className="flex items-center gap-2 w-full sm:w-auto">
@@ -15424,16 +16807,22 @@ ${instansiMitra}
                                           Batal
                                         </button>
                                       )}
-                                      <button
-                                        type="button"
-                                        id="btn-kirim-surat-perusahaan-ke-dosen"
-                                        onClick={() => handleUploadSuratBalasanMitra(latestSubmittedKlk)}
-                                        disabled={suratBalasanIsSubmitting}
-                                        className="w-full sm:w-auto px-5 py-2.5 bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white rounded-xl text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
-                                      >
-                                        <Send className="w-4 h-4 text-[#D4AF37]" />
-                                        <span>{suratBalasanIsSubmitting ? 'Mengirimkan...' : 'Kirimkan Surat ke Dosen Pembimbing KLK'}</span>
-                                      </button>
+                                        <button
+                                          type="button"
+                                          id="btn-kirim-surat-perusahaan-ke-dosen"
+                                          onClick={() => handleUploadSuratBalasanMitra(latestSubmittedKlk)}
+                                          disabled={suratBalasanIsSubmitting || isReadingSuratBalasanFile}
+                                          className="w-full sm:w-auto px-5 py-2.5 bg-[#002B49] hover:bg-[#003865] active:bg-[#001f35] text-white rounded-xl text-xs font-extrabold transition shadow-md flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+                                        >
+                                          <Send className="w-4 h-4 text-[#D4AF37]" />
+                                          <span>
+                                            {isReadingSuratBalasanFile
+                                              ? 'Memproses Berkas...'
+                                              : suratBalasanIsSubmitting
+                                              ? 'Mengirimkan...'
+                                              : 'Upload & Kirim ke Dosen Pembimbing KLK'}
+                                          </span>
+                                        </button>
                                     </div>
                                   </div>
                                 </div>
@@ -15442,7 +16831,7 @@ ${instansiMitra}
                           </div>
                         )}
 
-                        {/* Tahap 3B: Ditolak oleh Perusahaan -> Record permanen pada Riwayat */}
+                        {/* Tahap 3B: Ditolak oleh Perusahaan -> Mengulang dari awal pengajuan KLK */}
                         {latestSubmittedKlk.statusResponMitra === 'Ditolak' && (
                           <div className="p-4 bg-rose-50 border-2 border-rose-400 rounded-xl space-y-3 shadow-2xs">
                             <div className="flex items-start gap-2.5">
@@ -15451,10 +16840,10 @@ ${instansiMitra}
                               </div>
                               <div>
                                 <div className="font-extrabold text-rose-950 text-xs sm:text-sm">
-                                  Permohonan Ditolak oleh Mitra ({latestSubmittedKlk.namaMitra})
+                                  Permohonan Ditolak oleh Mitra ({latestSubmittedKlk.namaMitra}) — Mengulang dari Awal
                                 </div>
                                 <p className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
-                                  Seluruh rekam data dan berkas pengajuan ini telah tersimpan secara permanen sebagai ringkasan pada <strong>Riwayat Form Pengajuan KLK</strong> di bawah. Formulir yang telah dikirimkan tidak dapat diedit atau disubmit kembali.
+                                  Riwayat penolakan dari <strong>{latestSubmittedKlk.namaMitra}</strong> telah tersimpan pada <strong>Riwayat Form Pengajuan KLK</strong>. Anda kini dapat mengisi formulir pengajuan KLK baru dari awal.
                                 </p>
                               </div>
                             </div>
@@ -15663,188 +17052,26 @@ ${instansiMitra}
                       </div>
                     </div>
 
-                    {/* 8. Surat Resmi yang Diterbitkan Departemen untuk Mahasiswa (Surat Pengantar ke Mitra & Surat Tugas KLK) */}
-                    {(latestSubmittedKlk.status === 'Disetujui' || latestSubmittedKlk.status === 'Disetujui / Sedang Berjalan') && (
-                      <div className="p-4 bg-emerald-50/90 rounded-xl border-2 border-emerald-300 space-y-3 shadow-2xs">
-                        <div className="flex items-center justify-between pb-2 border-b border-emerald-200">
-                          <div className="flex items-center gap-2 font-extrabold text-emerald-950 text-xs">
-                            <FileCheck className="w-4 h-4 text-emerald-700" />
-                            <span>8. Surat Resmi yang Diterbitkan Departemen (Surat Pengantar ke Mitra &amp; Surat Tugas KLK)</span>
-                          </div>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200 text-emerald-950 border border-emerald-400">
-                            Terbit &amp; Dikirimkan ke Akun
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                          {/* Card 1: Surat Pengantar Resmi ke Mitra */}
-                          <div className="p-3.5 bg-white rounded-xl border border-emerald-200 shadow-2xs space-y-2 flex flex-col justify-between">
-                            <div>
-                              <div className="flex items-center justify-between gap-1 mb-1">
-                                <span className="font-extrabold text-slate-900 text-xs">Surat Pengantar Resmi KLK (Ke Mitra)</span>
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                              </div>
-                              <p className="text-[11px] text-slate-600 leading-relaxed">
-                                Surat permohonan resmi pengajuan KLK dari Ketua Departemen Kimia FSTeM UB ditujukan kepada pimpinan instansi mitra <strong>{latestSubmittedKlk.namaMitra}</strong>.
-                              </p>
-                              <div className="text-[10px] font-mono font-bold text-emerald-900 bg-emerald-50 p-1.5 rounded border border-emerald-200 mt-2">
-                                📄 Surat_Pengantar_Resmi_{latestSubmittedKlk.nim}.pdf
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPreviewDocData({
-                                  label: 'Surat Pengantar Resmi KLK (Ke Mitra)',
-                                  fileName: `Surat_Pengantar_Resmi_${latestSubmittedKlk.nim}.pdf`,
-                                  description: `Surat Pengantar Resmi permohonan KLK dari Ketua Departemen Kimia FSTeM Universitas Brawijaya untuk mahasiswa ${latestSubmittedKlk.mahasiswaNama} (${latestSubmittedKlk.nim}) ditujukan kepada Pimpinan Mitra ${latestSubmittedKlk.namaMitra}.`,
-                                  uploadedAt: latestSubmittedKlk.waktuSubmit || '14 Feb 2026',
-                                  fileSize: '480 KB',
-                                  category: 'Surat Resmi Departemen'
-                                });
-                              }}
-                              className="w-full py-1.5 bg-[#002B49] hover:bg-[#003865] text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs mt-2"
-                            >
-                              <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                              <span>Lihat &amp; Cetak Surat Pengantar</span>
-                            </button>
-                          </div>
-
-                          {/* Card 2: Surat Tugas Resmi KLK */}
-                          <div className="p-3.5 bg-white rounded-xl border border-emerald-200 shadow-2xs space-y-2 flex flex-col justify-between">
-                            <div>
-                              <div className="flex items-center justify-between gap-1 mb-1">
-                                <span className="font-extrabold text-slate-900 text-xs">Surat Tugas Resmi KLK</span>
-                                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                              </div>
-                              <p className="text-[11px] text-slate-600 leading-relaxed">
-                                Surat Tugas Dekan/Departemen No: <strong className="text-slate-900">{latestSubmittedKlk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'}</strong> sebagai bukti keabsahan pelaksanaan KLK.
-                              </p>
-                              <div className="text-[10px] font-mono font-bold text-emerald-900 bg-emerald-50 p-1.5 rounded border border-emerald-200 mt-2">
-                                📄 Surat_Tugas_Resmi_{latestSubmittedKlk.nim}.pdf
-                              </div>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setPreviewDocData({
-                                  label: 'Surat Tugas Resmi KLK',
-                                  fileName: `Surat_Tugas_Resmi_${latestSubmittedKlk.nim}.pdf`,
-                                  description: `Surat Tugas Resmi Pelaksanaan KLK No. ${latestSubmittedKlk.nomorSuratTugas || '0842/UN10.F09/AK-KLK/2026'} disahkan oleh Dekan FSTeM & Ketua Departemen Kimia UB.`,
-                                  uploadedAt: latestSubmittedKlk.waktuSubmit || '14 Feb 2026',
-                                  fileSize: '520 KB',
-                                  category: 'Surat Resmi Departemen'
-                                });
-                              }}
-                              className="w-full py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs mt-2"
-                            >
-                              <FileCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
-                              <span>Lihat &amp; Cetak Surat Tugas</span>
-                            </button>
-                          </div>
-
-                          {/* Card 3: Surat Balasan / Penerimaan dari Perusahaan ke Dosen Pembimbing KLK (Jika sudah diunggah) */}
-                          {latestSubmittedKlk.dokumenSuratBalasanMitra && (
-                            <div className={`p-3.5 bg-white rounded-xl border shadow-2xs space-y-2.5 flex flex-col justify-between ${
-                              latestSubmittedKlk.suratMitraDisetujuiDosen
-                                ? 'border-emerald-300 ring-1 ring-emerald-200'
-                                : latestSubmittedKlk.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan'
-                                ? 'border-amber-300 ring-1 ring-amber-200'
-                                : 'border-indigo-300 ring-1 ring-indigo-200'
-                            }`}>
-                              <div>
-                                <div className="flex items-center justify-between gap-1 mb-1.5 flex-wrap">
-                                  <span className="font-extrabold text-slate-900 text-xs">Surat Penerimaan Mitra (Ke Dosen)</span>
-                                  {latestSubmittedKlk.suratMitraDisetujuiDosen ? (
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300 flex items-center gap-1">
-                                      <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                                      <span>Disetujui Dosen</span>
-                                    </span>
-                                  ) : latestSubmittedKlk.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan' ? (
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300 flex items-center gap-1">
-                                      <RotateCcw className="w-3 h-3 text-amber-600" />
-                                      <span>Perlu Perbaikan</span>
-                                    </span>
-                                  ) : (
-                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 text-indigo-900 border border-indigo-300 flex items-center gap-1 animate-pulse">
-                                      <Clock className="w-3 h-3 text-indigo-600" />
-                                      <span>Menunggu Cek Dosen</span>
-                                    </span>
-                                  )}
-                                </div>
-
-                                <p className="text-[11px] text-slate-600 leading-relaxed">
-                                  Surat resmi penerimaan dari <strong>{latestSubmittedKlk.namaMitra}</strong> ditujukan kepada Dosen Pembimbing KLK ({latestSubmittedKlk.dosenPembimbingKLK && latestSubmittedKlk.dosenPembimbingKLK !== 'Belum Ditetapkan (Akan Ditetapkan Admin TU pada Tahap 3)' ? latestSubmittedKlk.dosenPembimbingKLK : (latestSubmittedKlk.dpaNama || 'Dosen Pembimbing KLK')}).
-                                </p>
-
-                                <div className="text-[10px] font-mono font-bold text-slate-800 bg-slate-50 p-2 rounded-lg border border-slate-200 mt-2 truncate">
-                                  📄 {latestSubmittedKlk.dokumenSuratBalasanMitra}
-                                </div>
-
-                                {latestSubmittedKlk.suratMitraDisetujuiDosen ? (
-                                  <div className="mt-2 p-2 bg-emerald-50 rounded-lg border border-emerald-200 text-[10px] text-emerald-900 font-semibold flex items-center gap-1.5">
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                    <span>Telah disetujui Dosen Pembimbing KLK. Akses Logbook Mingguan &amp; Bimbingan Dosen aktif terbuka!</span>
-                                  </div>
-                                ) : latestSubmittedKlk.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan' ? (
-                                  <div className="mt-2 p-2 bg-amber-50 rounded-lg border border-amber-300 text-[10px] text-amber-900 space-y-1">
-                                    <span className="font-bold flex items-center gap-1">
-                                      <RotateCcw className="w-3 h-3 text-amber-700" />
-                                      Catatan Dosen Pembimbing KLK:
-                                    </span>
-                                    <p className="italic">&quot;{latestSubmittedKlk.catatanVerifikasiSuratMitraDosen || 'Mohon unggah ulang berkas surat resmi.'}&quot;</p>
-                                  </div>
-                                ) : (
-                                  <div className="mt-2 p-2 bg-indigo-50 rounded-lg border border-indigo-200 text-[10px] text-indigo-900 flex items-center gap-1.5">
-                                    <Clock className="w-3.5 h-3.5 text-indigo-600 shrink-0" />
-                                    <span>Menunggu pengecekan Dosen Pembimbing KLK. Logbook &amp; Bimbingan akan terbuka setelah disetujui.</span>
-                                  </div>
-                                )}
-                              </div>
-
-                              <div className="space-y-1.5 pt-1">
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setPreviewDocData({
-                                      label: 'Surat Penerimaan Perusahaan ke Dosen Pembimbing KLK',
-                                      fileName: latestSubmittedKlk.dokumenSuratBalasanMitra || 'Surat_Penerimaan_Resmi_Mitra.pdf',
-                                      description: `Surat penerimaan resmi dari ${latestSubmittedKlk.namaMitra} (No: ${latestSubmittedKlk.nomorSuratBalasanMitra || '-'}) ditujukan kepada Dosen Pembimbing KLK.`,
-                                      uploadedAt: latestSubmittedKlk.waktuKirimSuratBalasanMitra || '14 Feb 2026',
-                                      fileSize: '540 KB',
-                                      category: 'Surat Balasan Mitra'
-                                    });
-                                  }}
-                                  className="w-full py-1.5 bg-[#002B49] hover:bg-[#003865] text-white text-[11px] font-bold rounded-lg transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                                >
-                                  <Eye className="w-3.5 h-3.5 text-[#D4AF37]" />
-                                  <span>Lihat Surat Perusahaan</span>
-                                </button>
-
-                                {(!latestSubmittedKlk.suratMitraDisetujuiDosen || latestSubmittedKlk.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan') && (
-                                  <button
-                                    type="button"
-                                    onClick={() => setIsEditingSuratBalasan(true)}
-                                    className="w-full py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 text-[10px] font-semibold rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
-                                  >
-                                    <Pencil className="w-3 h-3 text-slate-500" />
-                                    <span>Unggah Ulang / Ganti Berkas Surat Mitra</span>
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    )}
                   </div>
                 </div>
               ) : (
                 <>
-                  {/* Banner Pemberitahuan Form Dibuka Kembali karena Direvisi atau Ditolak oleh Dosen / Admin */}
+                  {/* Banner Pemberitahuan Form Dibuka Kembali karena Direvisi atau Ditolak oleh Dosen / Admin / Perusahaan Mitra */}
                   {isMahasiswa && latestSubmittedKlk && isFormRevisiOrDitolakByDosenOrAdmin && (
                     <div className="space-y-3 mb-5">
-                      {(latestSubmittedKlk.statusVerifikasiDosen === 'Perlu Revisi' || latestSubmittedKlk.status === 'Perlu Revisi') ? (
+                      {latestSubmittedKlk.statusResponMitra === 'Ditolak' ? (
+                        <div className="p-4 bg-rose-50 border-2 border-rose-400 rounded-xl space-y-2.5 shadow-2xs">
+                          <div className="flex items-center gap-2 font-extrabold text-rose-950 text-xs sm:text-sm">
+                            <XCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span>
+                              Formulir Dibuka Kembali — Ditolak Perusahaan / Mitra ({latestSubmittedKlk.namaMitra})
+                            </span>
+                          </div>
+                          <p className="text-xs text-rose-900 leading-relaxed font-sans">
+                            Permohonan KLK sebelumnya ke instansi mitra <strong>{latestSubmittedKlk.namaMitra}</strong> dinyatakan <strong>Ditolak oleh Mitra</strong> dan telah diarsipkan pada <strong>Riwayat Form Pengajuan KLK</strong>. Silakan mengisi formulir pengajuan KLK baru dari awal untuk perusahaan / mitra tujuan berikutnya, lalu klik <strong>Simpan &amp; Ajukan Ulang KLK dari Awal</strong>.
+                          </p>
+                        </div>
+                      ) : (latestSubmittedKlk.statusVerifikasiDosen === 'Perlu Revisi' || latestSubmittedKlk.status === 'Perlu Revisi') ? (
                         <div className="p-4 bg-amber-50 border-2 border-amber-400 rounded-xl space-y-2.5 shadow-2xs">
                           <div className="flex items-center gap-2 font-extrabold text-amber-950 text-xs sm:text-sm">
                             <RotateCcw className="w-4 h-4 text-amber-700 shrink-0" />
@@ -15867,11 +17094,19 @@ ${instansiMitra}
                             <span>
                               {latestSubmittedKlk.statusVerifikasiDosen === 'Ditolak'
                                 ? 'Formulir Dibuka Kembali — Pengajuan KLK Ditolak Dosen PA'
-                                : 'Formulir Dibuka Kembali — Pengajuan KLK Ditolak / Dikembalikan Admin'}
+                                : 'Formulir Dibuka Kembali — Pengajuan KLK Ditolak / Dikembalikan Admin TU'}
                             </span>
                           </div>
                           <p className="text-xs text-rose-900 leading-relaxed font-sans">
-                            Pengajuan KLK sebelumnya belum dapat disetujui. Anda dapat mengisi atau mengedit kembali data pada formulir di bawah ini lalu klik <strong>Simpan &amp; Ajukan Ulang Usulan KLK</strong>.
+                            {isRejectedByAdminOnly ? (
+                              <>
+                                Pengajuan KLK Anda telah disetujui Dosen PA, namun ditolak/dikembalikan oleh Admin TU. Silakan perbaiki data atau berkas pada formulir di bawah ini sesuai catatan Admin TU, lalu klik <strong>Simpan &amp; Kirim Kembali ke Admin TU</strong>.
+                              </>
+                            ) : (
+                              <>
+                                Pengajuan KLK sebelumnya belum dapat disetujui. Anda dapat mengisi atau mengedit kembali data pada formulir di bawah ini lalu klik <strong>Simpan &amp; Ajukan Ulang Usulan KLK</strong>.
+                              </>
+                            )}
                           </p>
                           <div className="p-3 bg-white rounded-lg border border-rose-300 text-xs text-rose-950 leading-relaxed font-sans shadow-2xs">
                             <span className="font-bold block text-[11px] text-rose-900 mb-0.5">
@@ -16348,17 +17583,21 @@ ${instansiMitra}
                   filteredMkKonversiList.map((mkStr) => {
                     const info = parseMkKonversiString(mkStr);
                     const isSelected = formMkKonversiList.includes(mkStr);
-                    const conflictWithSelected = !isSelected
-                      ? getSerialConflictWith(mkStr, formMkKonversiList)
-                      : null;
-                    const isSerialLocked = Boolean(conflictWithSelected);
-                    const willExceed16Sks = !isSelected && formTotalSks + info.sks > 16;
+                    const selectCheck: ReturnType<typeof checkCanSelectMkKonversi> = !isSelected
+                      ? checkCanSelectMkKonversi(mkStr, formMkKonversiList)
+                      : { canSelect: true, projectedTotalSks: formTotalSks };
+                    const conflictWithSelected = selectCheck.conflictWith || null;
+                    const isSerialLocked = !isSelected && selectCheck.reason === 'serial';
+                    const willExceed16Sks = !isSelected && selectCheck.reason === 'exceed_16';
+                    const isUnreachableTarget = !isSelected && selectCheck.reason === 'unreachable_target';
+                    const isCannotSelect = !isSelected && !selectCheck.canSelect;
 
                     return (
                       <div
                         key={mkStr}
                         role="checkbox"
                         aria-checked={isSelected}
+                        aria-disabled={isCannotSelect}
                         tabIndex={0}
                         onClick={() => handleToggleMkKonversi(mkStr)}
                         onKeyDown={(e) => {
@@ -16367,21 +17606,15 @@ ${instansiMitra}
                             handleToggleMkKonversi(mkStr);
                           }
                         }}
-                        title={
-                          isSerialLocked && conflictWithSelected
-                            ? `Terkunci: Tidak boleh berpasangan dengan ${parseMkKonversiString(conflictWithSelected).nama} (mata kuliah berseri)`
-                            : willExceed16Sks
-                            ? `Batas Maksimal 16 SKS: Menambahkan ${info.nama} (${info.sks} SKS) akan membuat total menjadi ${formTotalSks + info.sks} SKS (melebihi batas maksimal 16 SKS).`
-                            : undefined
-                        }
-                        className={`p-3 rounded-xl border text-left transition-all cursor-pointer flex items-start gap-2.5 relative group ${
+                        title={selectCheck.message || undefined}
+                        className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 relative group ${
                           isSelected
-                            ? 'bg-blue-50/70 border-[#002B49] ring-1 ring-[#002B49]/30 shadow-xs'
+                            ? 'bg-blue-50/70 border-[#002B49] ring-1 ring-[#002B49]/30 shadow-xs cursor-pointer'
                             : isSerialLocked
-                            ? 'bg-amber-50/30 border-amber-200/80 hover:border-amber-300 hover:bg-amber-50/50'
-                            : willExceed16Sks
-                            ? 'bg-slate-50/60 border-slate-200/80 opacity-60 hover:opacity-85 hover:border-slate-300'
-                            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/80'
+                            ? 'bg-amber-50/30 border-amber-200/80 opacity-75 cursor-not-allowed'
+                            : willExceed16Sks || isUnreachableTarget
+                            ? 'bg-slate-50/60 border-slate-200/80 opacity-60 cursor-not-allowed'
+                            : 'bg-white border-slate-200 hover:border-slate-300 hover:bg-slate-50/80 cursor-pointer'
                         }`}
                       >
                         {/* Circle Indicator */}
@@ -16392,7 +17625,7 @@ ${instansiMitra}
                                 ? 'border-[#002B49] bg-white ring-2 ring-[#002B49]/20'
                                 : isSerialLocked
                                 ? 'border-amber-400 bg-amber-50'
-                                : willExceed16Sks
+                                : isCannotSelect
                                 ? 'border-slate-300 bg-slate-100'
                                 : 'border-slate-300 bg-white group-hover:border-slate-400'
                             }`}
@@ -16400,7 +17633,7 @@ ${instansiMitra}
                             {isSelected && (
                               <div className="w-2 h-2 rounded-full bg-[#002B49] animate-scale-in" />
                             )}
-                            {isSerialLocked && !isSelected && (
+                            {isCannotSelect && !isSelected && (
                               <Lock className="w-2 h-2 text-amber-600" />
                             )}
                           </div>
@@ -16431,15 +17664,21 @@ ${instansiMitra}
                               </span>
                             )}
                             {willExceed16Sks && !isSerialLocked && (
-                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-300 flex items-center gap-1">
-                                <AlertCircle className="w-2.5 h-2.5 text-slate-500" />
-                                <span>+{info.sks} SKS (&gt;16 SKS)</span>
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                                <Lock className="w-2.5 h-2.5 text-rose-600" />
+                                <span>Tidak Dapat Dipilih (+{info.sks} SKS &gt; 16 SKS)</span>
+                              </span>
+                            )}
+                            {isUnreachableTarget && (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-rose-100 text-rose-800 border border-rose-200 flex items-center gap-1">
+                                <Lock className="w-2.5 h-2.5 text-rose-600" />
+                                <span>Tidak Dapat Dipilih (Tidak Memenuhi Target SKS)</span>
                               </span>
                             )}
                           </div>
 
                           <div className={`font-bold text-xs mt-1.5 leading-snug ${
-                            isSerialLocked || willExceed16Sks ? 'text-slate-700' : 'text-slate-900'
+                            isCannotSelect ? 'text-slate-600' : 'text-slate-900'
                           }`}>
                             {info.nama || info.kode}
                           </div>
@@ -16454,8 +17693,13 @@ ${instansiMitra}
                             </div>
                           )}
                           {willExceed16Sks && !isSerialLocked && (
-                            <div className="text-[10px] font-medium text-slate-500 mt-1 flex items-center gap-1">
-                              <span>⚠ Melebihi batas 16 SKS jika ditambahkan (akan menjadi {formTotalSks + info.sks} SKS)</span>
+                            <div className="text-[10px] font-medium text-rose-600 mt-1 flex items-center gap-1">
+                              <span>⚠ Tidak dapat dipilih: melebihi batas maksimal 16 SKS (akan menjadi {formTotalSks + info.sks} SKS)</span>
+                            </div>
+                          )}
+                          {isUnreachableTarget && (
+                            <div className="text-[10px] font-medium text-rose-600 mt-1 flex items-center gap-1">
+                              <span>⚠ Tidak dapat dipilih: kombinasi 15 SKS tidak dapat mencapai target 16 SKS</span>
                             </div>
                           )}
                         </div>
@@ -16498,14 +17742,14 @@ ${instansiMitra}
                   </div>
                 </div>
               ) : (
-                <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-start gap-2.5">
-                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div className="p-3 bg-rose-50 border border-rose-300 rounded-xl text-xs text-rose-900 flex items-start gap-2.5">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
                   <div>
-                    <div className="font-bold">
-                      Perhatian: Total Akumulasi SKS Saat Ini ({formTotalSks} SKS)
+                    <div className="font-bold text-rose-950">
+                      Kombinasi SKS Belum Memenuhi Target ({formTotalSks} SKS) — Tidak Dapat Disubmit
                     </div>
-                    <div className="text-[11px] text-amber-800 mt-0.5">
-                      Jumlah SKS usulan mata kuliah konversi yang dipilih saat ini belum memenuhi kombinasi resmi yang diizinkan. Silakan pilih atau sesuaikan kombinasi mata kuliah hingga totalnya bernilai tepat <strong>4 SKS</strong>, <strong>7 SKS</strong>, <strong>10 SKS</strong>, <strong>13 SKS</strong>, atau <strong>16 SKS</strong> tanpa memilih mata kuliah berseri secara berpasangan.
+                    <div className="text-[11px] text-rose-800 mt-0.5 leading-relaxed">
+                      Mata kuliah konversi yang dipilih wajib memenuhi tepat salah satu pilihan target kombinasi: <strong>4 SKS</strong>, <strong>7 SKS</strong>, <strong>10 SKS</strong>, <strong>13 SKS</strong>, atau <strong>16 SKS</strong>. Jumlah pilihan seperti <strong>9 SKS</strong>, <strong>12 SKS</strong>, atau melebihi <strong>16 SKS</strong> tidak memenuhi ketentuan sehingga <strong>tidak dapat disubmit</strong>. Silakan sesuaikan pilihan mata kuliah Anda terlebih dahulu.
                     </div>
                   </div>
                 </div>
@@ -16861,7 +18105,15 @@ ${instansiMitra}
 
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pt-4 border-t border-slate-200">
               <div className="text-xs text-slate-500">
-                Pastikan data kegiatan, mata kuliah konversi, dan berkas persyaratan telah terisi sebelum menyimpan usulan.
+                {!isFormKombinasiSksValid ? (
+                  <span className="text-rose-700 font-semibold">
+                    ⚠ Usulan belum dapat disubmit karena total SKS terpilih ({formTotalSks} SKS) belum memenuhi kombinasi target 4, 7, 10, 13, atau 16 SKS.
+                  </span>
+                ) : (
+                  <span>
+                    Pastikan data kegiatan, mata kuliah konversi, dan berkas persyaratan telah terisi sebelum menyimpan usulan.
+                  </span>
+                )}
               </div>
 
               <div className="flex items-center space-x-3 self-end sm:self-auto">
@@ -16875,18 +18127,26 @@ ${instansiMitra}
                 <button
                   type="submit"
                   id="btn-submit-klk-baru"
-                  disabled={isSubmittingForm}
+                  disabled={isSubmittingForm || !isFormKombinasiSksValid}
                   className={`px-6 py-2.5 font-bold rounded-lg text-xs shadow-sm flex items-center space-x-2 transition-colors ${
-                    isSubmittingForm
-                      ? 'bg-slate-400 text-slate-200 cursor-not-allowed opacity-80'
+                    isSubmittingForm || !isFormKombinasiSksValid
+                      ? 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-80'
                       : 'bg-[#002B49] hover:bg-[#003861] active:bg-[#00243d] text-white cursor-pointer'
                   }`}
-                  title="Simpan & Ajukan Usulan KLK"
+                  title={
+                    !isFormKombinasiSksValid
+                      ? `Tidak dapat disubmit: Total ${formTotalSks} SKS tidak memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS`
+                      : 'Simpan & Ajukan Usulan KLK'
+                  }
                 >
                   <Send className="w-4 h-4 text-[#D4AF37]" />
                   <span>
                     {isSubmittingForm
                       ? 'Memproses Usulan...'
+                      : isMahasiswa && latestSubmittedKlk?.statusResponMitra === 'Ditolak'
+                      ? 'Simpan & Ajukan Ulang KLK dari Awal'
+                      : isMahasiswa && isRejectedByAdminOnly
+                      ? 'Simpan & Kirim Kembali ke Admin TU'
                       : isMahasiswa && isFormRevisiOrDitolakByDosenOrAdmin
                       ? 'Simpan & Ajukan Ulang Usulan KLK'
                       : 'Simpan & Ajukan Usulan KLK'}
@@ -16908,12 +18168,19 @@ ${instansiMitra}
                   klk={latestSubmittedKlk}
                   dosenPANama={currentStudentData.dosenPANama || latestSubmittedKlk.dpaNama}
                   stepContext={2}
+                  currentWorkflowStep={workflowProgressStep}
                   onPreviewDoc={(doc) => setPreviewDocData(doc)}
                   onNavigateStep={(st) => setFormWorkflowActiveStep(st)}
                   canAccessDosen={canAccessVerifikasiDosen}
                   canAccessAdmin={isSuperAdminOrAdmin}
                   onOpenDosenTab={() => setSubTab('verifikasi-pengajuan-dosen')}
                   onOpenAdminTab={() => setSubTab('verifikasi-pengajuan')}
+                  onOpenSuratPengantar={(k) =>
+                    isSuperAdminOrAdmin
+                      ? handleOpenSuratPengantarAdmin(k)
+                      : handleOpenSuratPengantarMahasiswa(k)
+                  }
+                  onDownloadSuratPengantarPdf={(k) => handleQuickDownloadSuratPengantarAdmin(k)}
                 />
               ) : (
                 <div className="bg-white rounded-2xl border-2 border-dashed border-slate-200 shadow-sm p-8 text-center space-y-4">
@@ -16950,12 +18217,19 @@ ${instansiMitra}
                     klk={latestSubmittedKlk}
                     dosenPANama={currentStudentData.dosenPANama || latestSubmittedKlk.dpaNama}
                     stepContext={3}
+                    currentWorkflowStep={workflowProgressStep}
                     onPreviewDoc={(doc) => setPreviewDocData(doc)}
                     onNavigateStep={(st) => setFormWorkflowActiveStep(st)}
                     canAccessDosen={canAccessVerifikasiDosen}
                     canAccessAdmin={isSuperAdminOrAdmin}
                     onOpenDosenTab={() => setSubTab('verifikasi-pengajuan-dosen')}
                     onOpenAdminTab={() => setSubTab('verifikasi-pengajuan')}
+                    onOpenSuratPengantar={(k) =>
+                      isSuperAdminOrAdmin
+                        ? handleOpenSuratPengantarAdmin(k)
+                        : handleOpenSuratPengantarMahasiswa(k)
+                    }
+                    onDownloadSuratPengantarPdf={(k) => handleQuickDownloadSuratPengantarAdmin(k)}
                   />
                 </>
               ) : (
@@ -17011,13 +18285,13 @@ ${instansiMitra}
             <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
               <span className="px-2.5 py-1 rounded-lg text-xs font-bold bg-slate-100 text-slate-700 border border-slate-200 flex items-center gap-1.5">
                 <FileSpreadsheet className="w-3.5 h-3.5 text-[#002B49]" />
-                <span>{studentFormHistoryList.length} Pengajuan Tercatat</span>
+                <span>{studentFormHistoryEntries.length} Pengajuan Tercatat</span>
               </span>
             </div>
           </div>
 
           {/* Konten Daftar Riwayat Form */}
-          {studentFormHistoryList.length === 0 ? (
+          {studentFormHistoryEntries.length === 0 ? (
             <div className="py-8 px-4 text-center space-y-3 bg-slate-50/70 rounded-xl border border-dashed border-slate-300">
               <div className="w-12 h-12 rounded-full bg-slate-100 border border-slate-200 flex items-center justify-center mx-auto text-slate-400">
                 <FileText className="w-6 h-6 text-slate-400" />
@@ -17050,9 +18324,20 @@ ${instansiMitra}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 bg-white">
-                    {studentFormHistoryList.map((item, idx) => {
-                      const isSelectedForTimeline = submittedKlkIdForForm === item.id;
+                    {studentFormHistoryEntries.map((item, idx) => {
+                      const isSelectedForTimeline = submittedKlkIdForForm === item.parentKlkId && !item.isArchivedVersion;
                       const posisiInfo = (() => {
+                        if (item.isArchivedVersion) {
+                          return {
+                            badge: 'bg-slate-100 text-slate-700 border-slate-300',
+                            statusText: item.statusVerifikasiDosen === 'Perlu Revisi'
+                              ? 'Direvisi (Arsip Sebelumnya)'
+                              : item.status === 'Ditolak' || item.statusVerifikasiDosen === 'Ditolak'
+                              ? 'Ditolak (Arsip Sebelumnya)'
+                              : 'Diperbarui (Arsip Sebelumnya)',
+                            posisiText: item.alasanPerubahan || 'Pengajuan terdahulu sebelum perubahan data/mitra'
+                          };
+                        }
                         if (item.status === 'Selesai & Dinilai') {
                           return {
                             badge: 'bg-emerald-100 text-emerald-800 border-emerald-300',
@@ -17061,10 +18346,12 @@ ${instansiMitra}
                           };
                         }
                         if (item.status === 'Disetujui' || item.status === 'Disetujui / Sedang Berjalan') {
+                          const linkedKlk = klkList.find((k) => k.id === item.parentKlkId);
+                          const stageInfo = getKlkWorkflow8StageStatus(linkedKlk || (item as unknown as PengajuanKLK));
                           return {
                             badge: 'bg-emerald-100 text-emerald-800 border-emerald-300',
-                            statusText: 'Disetujui (Surat Tugas Terbit)',
-                            posisiText: item.nomorSuratTugas ? `Surat Tugas: ${item.nomorSuratTugas}` : 'Surat Tugas Resmi Diterbitkan (Tahap 3 Selesai)'
+                            statusText: stageInfo.shortStatusLabel,
+                            posisiText: stageInfo.headline
                           };
                         }
                         if (item.statusVerifikasiDosen === 'Disetujui Dosen') {
@@ -17099,15 +18386,32 @@ ${instansiMitra}
                         <tr
                           key={item.id}
                           className={`hover:bg-slate-50 transition-colors ${
-                            isSelectedForTimeline ? 'bg-blue-50/60 font-medium' : ''
+                            item.isArchivedVersion
+                              ? 'bg-slate-50/70 text-slate-600'
+                              : isSelectedForTimeline
+                              ? 'bg-blue-50/60 font-medium'
+                              : ''
                           }`}
                         >
                           {/* 1. Pengajuan ke- */}
                           <td className="py-3 px-3.5 align-top">
                             <div className="space-y-1">
-                              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-[#002B49] text-[#D4AF37] shadow-2xs">
-                                Pengajuan ke-{idx + 1}
-                              </span>
+                              <div className="flex items-center gap-1 flex-wrap">
+                                <span
+                                  className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-extrabold shadow-2xs ${
+                                    item.isArchivedVersion
+                                      ? 'bg-slate-200 text-slate-700'
+                                      : 'bg-[#002B49] text-[#D4AF37]'
+                                  }`}
+                                >
+                                  Pengajuan ke-{idx + 1}
+                                </span>
+                                {!item.isArchivedVersion && studentFormHistoryEntries.length > 1 && (
+                                  <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                                    Aktif
+                                  </span>
+                                )}
+                              </div>
                               <div className="font-mono text-[10px] text-slate-500 font-bold">
                                 {item.kodePendaftaran}
                               </div>
@@ -17171,7 +18475,7 @@ ${instansiMitra}
                               </div>
                               <div className="text-[11px] text-slate-600 leading-snug">
                                 <span className="font-semibold text-slate-500 text-[10px] uppercase block tracking-wider">
-                                  Posisi Formulir Saat Ini:
+                                  {item.isArchivedVersion ? 'Catatan Perubahan:' : 'Posisi Formulir Saat Ini:'}
                                 </span>
                                 {posisiInfo.posisiText}
                               </div>
@@ -17183,9 +18487,9 @@ ${instansiMitra}
                             <button
                               type="button"
                               onClick={() => {
-                                setSubmittedKlkIdForForm(item.id);
+                                setSubmittedKlkIdForForm(item.parentKlkId);
                                 try {
-                                  sessionStorage.setItem('sikma_klk_form_submitted_id', item.id);
+                                  sessionStorage.setItem('sikma_klk_form_submitted_id', item.parentKlkId);
                                 } catch {}
                                 const el = document.getElementById('box-riwayat-klk-mahasiswa');
                                 if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -17210,21 +18514,36 @@ ${instansiMitra}
 
               {/* Mobile Card List View */}
               <div className="block md:hidden space-y-3">
-                {studentFormHistoryList.map((item, idx) => {
-                  const isSelectedForTimeline = submittedKlkIdForForm === item.id;
+                {studentFormHistoryEntries.map((item, idx) => {
+                  const isSelectedForTimeline = submittedKlkIdForForm === item.parentKlkId && !item.isArchivedVersion;
                   return (
                     <div
                       key={item.id}
                       className={`p-4 rounded-xl border space-y-3 ${
-                        isSelectedForTimeline
+                        item.isArchivedVersion
+                          ? 'bg-slate-50/80 border-slate-200 opacity-90'
+                          : isSelectedForTimeline
                           ? 'bg-blue-50/70 border-[#002B49] ring-2 ring-[#002B49]/20'
                           : 'bg-slate-50 border-slate-200'
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2 border-b border-slate-200/80 pb-2">
-                        <span className="px-2.5 py-0.5 rounded-md text-[11px] font-extrabold bg-[#002B49] text-[#D4AF37]">
-                          Pengajuan ke-{idx + 1}
-                        </span>
+                        <div className="flex items-center gap-1.5">
+                          <span
+                            className={`px-2.5 py-0.5 rounded-md text-[11px] font-extrabold ${
+                              item.isArchivedVersion
+                                ? 'bg-slate-200 text-slate-700'
+                                : 'bg-[#002B49] text-[#D4AF37]'
+                            }`}
+                          >
+                            Pengajuan ke-{idx + 1}
+                          </span>
+                          {!item.isArchivedVersion && studentFormHistoryEntries.length > 1 && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              Aktif
+                            </span>
+                          )}
+                        </div>
                         <span className="font-mono text-[10px] font-bold text-slate-600 bg-white px-2 py-0.5 rounded border border-slate-200">
                           {item.kodePendaftaran}
                         </span>
@@ -17263,7 +18582,7 @@ ${instansiMitra}
                           Status &amp; Posisi Formulir:
                         </span>
                         <span className="inline-block px-2.5 py-0.5 rounded-full text-[10px] font-extrabold bg-blue-100 text-[#002B49] border border-blue-200">
-                          {item.status}
+                          {item.isArchivedVersion ? `Arsip Sebelumnya (${item.alasanPerubahan || item.status})` : item.status}
                         </span>
                         {item.nomorSuratTugas && (
                           <div className="text-[10px] font-mono text-emerald-800 mt-1">
@@ -17275,9 +18594,9 @@ ${instansiMitra}
                       <button
                         type="button"
                         onClick={() => {
-                          setSubmittedKlkIdForForm(item.id);
+                          setSubmittedKlkIdForForm(item.parentKlkId);
                           try {
-                            sessionStorage.setItem('sikma_klk_form_submitted_id', item.id);
+                            sessionStorage.setItem('sikma_klk_form_submitted_id', item.parentKlkId);
                           } catch {}
                           const el = document.getElementById('box-riwayat-klk-mahasiswa');
                           if (el) el.scrollIntoView({ behavior: 'smooth' });
@@ -17301,7 +18620,7 @@ ${instansiMitra}
                   </span>
                 </div>
                 <span className="font-semibold text-slate-700">
-                  Total: {studentFormHistoryList.length} Formulir Usulan
+                  Total: {studentFormHistoryEntries.length} Formulir Usulan
                 </span>
               </div>
             </div>
@@ -17341,6 +18660,11 @@ ${instansiMitra}
           : hasRegisteredKlk && hasStudentStartedKlk(selectedKlk);
 
         const showEmptyForStudent = isMahasiswa && (!hasRegisteredKlk || !isKlkStarted);
+        const isDosenPembimbingKlkForSelected = checkIsDosenPembimbingKlkOnly(
+          effectiveUser || currentUser,
+          selectedKlk,
+          dosenList
+        );
 
         return (
           <div className="space-y-6">
@@ -17401,6 +18725,31 @@ ${instansiMitra}
                     {selectedKlk ? selectedKlk.dosenPembimbingKLK : '-'}
                   </strong>
                 </div>
+              </div>
+            )}
+
+            {/* KONDISI: PENCARIAN LOGBOOK TIDAK ADA HASIL */}
+            {!showEmptyForStudent && filteredRoleScopedKlkList.length === 0 && logbookKlkSearch.trim() && (
+              <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-8 sm:p-10 text-center max-w-xl mx-auto space-y-4">
+                <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center mx-auto border border-amber-200">
+                  <Search className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="text-base font-bold text-slate-800">
+                    Tidak ada hasil &quot;{logbookKlkSearch}&quot;
+                  </h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto leading-relaxed">
+                    Pencarian kegiatan KLK atau nama mahasiswa tidak ditemukan. Silakan gunakan kata kunci lain atau bersihkan pencarian.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLogbookKlkSearch('')}
+                  className="px-4 py-2 bg-[#002B49] text-white rounded-xl text-xs font-bold hover:bg-[#003865] transition shadow-xs cursor-pointer inline-flex items-center gap-1.5"
+                >
+                  <X className="w-3.5 h-3.5 text-[#D4AF37]" />
+                  <span>Reset Pencarian</span>
+                </button>
               </div>
             )}
 
@@ -17496,36 +18845,25 @@ ${instansiMitra}
                   <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
                     <Clock className="w-3.5 h-3.5 text-amber-700" />
                     <span>
-                      {selectedKlk?.dokumenSuratBalasanMitra || selectedKlk?.suratBalasanTerkirimKeDosen
-                        ? 'Menunggu Pengecekan & Persetujuan Dosen Pembimbing KLK'
+                      {selectedKlk?.statusResponMitra === 'Diterima'
+                        ? 'Wajib Upload Surat Perusahaan ke Dosen Pembimbing KLK'
                         : `Kegiatan KLK Belum Dimulai • Status: ${selectedKlk?.status || 'Diproses'}`}
                     </span>
                   </div>
                   <h3 className="text-lg font-bold text-slate-800">
-                    {selectedKlk?.dokumenSuratBalasanMitra || selectedKlk?.suratBalasanTerkirimKeDosen
-                      ? 'Berkas Surat Perusahaan Sedang Diperiksa Dosen Pembimbing KLK'
+                    {selectedKlk?.statusResponMitra === 'Diterima'
+                      ? 'Unggah Surat Penerimaan Perusahaan untuk Membuka Logbook & Bimbingan'
                       : 'Tab Logbook Mingguan KLK Masih Belum Terbuka'}
                   </h3>
                   <p className="text-xs text-slate-600 max-w-lg mx-auto leading-relaxed">
-                    {selectedKlk?.dokumenSuratBalasanMitra || selectedKlk?.suratBalasanTerkirimKeDosen
-                      ? `Anda telah mengirimkan berkas Surat Penerimaan resmi dari ${selectedKlk?.namaMitra} kepada Dosen Pembimbing KLK (${selectedKlk?.dosenPembimbingKLK && !selectedKlk?.dosenPembimbingKLK.includes('Belum Ditetapkan') ? selectedKlk?.dosenPembimbingKLK : (selectedKlk?.dpaNama || 'Dosen Pembimbing KLK')}). Form pengisian Logbook Mingguan dan Absensi Harian akan terbuka secara otomatis segera setelah Dosen Pembimbing KLK memeriksa berkas dan menyetujuinya.`
-                      : selectedKlk?.status === 'Ditolak'
-                      ? 'Pengajuan pendaftaran KLK Anda berstatus Ditolak. Anda belum dapat memulai kegiatan maupun mengisi logbook mingguan. Silakan konsultasikan dengan Koordinator KLK atau ajukan pendaftaran baru.'
+                    {selectedKlk?.status === 'Ditolak'
+                      ? 'Pengajuan pendaftaran KLK Anda berstatus Ditolak. Anda belum dapat memulai kegiatan maupun mengisi logbook mingguan. Silakan ajukan pendaftaran baru dari awal pada Tab Form Pengajuan KLK.'
                       : selectedKlk?.status === 'Disetujui' || selectedKlk?.status === 'Disetujui / Sedang Berjalan'
-                      ? `Pendaftaran KLK Anda telah disetujui Departemen. Silakan konfirmasi respon mitra dan unggah Surat Penerimaan dari instansi mitra ${selectedKlk?.namaMitra} pada Tab Form Pengajuan KLK agar dapat diverifikasi oleh Dosen Pembimbing KLK untuk membuka akses Logbook.`
-                      : `Pengajuan KLK Anda di ${selectedKlk?.namaMitra || 'Mitra Industri'} saat ini masih dalam proses peninjauan dan verifikasi Departemen Kimia (Status: "${selectedKlk?.status || 'Diproses'}"). Form pengisian dan riwayat Logbook Mingguan akan otomatis aktif setelah pendaftaran disetujui dan kegiatan resmi dimulai.`}
+                      ? selectedKlk?.statusResponMitra === 'Diterima'
+                        ? `Selamat atas diterimanya Anda di ${selectedKlk?.namaMitra}! Silakan unggah & kirimkan Surat Penerimaan dari perusahaan/mitra kepada Dosen Pembimbing KLK pada Tab Form Pengajuan KLK agar akses Logbook Mingguan dan Bimbingan Dosen langsung terbuka.`
+                        : `Pendaftaran KLK Anda telah disetujui Admin TU Departemen Kimia dan Surat Pengantar telah dikirimkan. Silakan konfirmasi jawaban perusahaan/mitra serta unggah Surat Penerimaan dari ${selectedKlk?.namaMitra} pada Tab Form Pengajuan KLK untuk membuka Logbook & Bimbingan.`
+                      : `Pengajuan KLK Anda di ${selectedKlk?.namaMitra || 'Mitra Industri'} saat ini masih dalam proses peninjauan dan verifikasi Departemen Kimia (Status: "${selectedKlk?.status || 'Diproses'}"). Form pengisian Logbook Mingguan akan otomatis aktif setelah pengajuan disetujui, diterima mitra, dan surat dari mitra diunggah ke Dosen Pembimbing.`}
                   </p>
-
-                  {/* Catatan revisi jika Dosen meminta perbaikan surat mitra */}
-                  {selectedKlk?.statusVerifikasiSuratMitraDosen === 'Perlu Perbaikan' && (
-                    <div className="p-3 bg-amber-50 border border-amber-300 rounded-xl text-xs text-amber-950 text-left max-w-lg mx-auto space-y-1">
-                      <span className="font-bold flex items-center gap-1 text-amber-900">
-                        <RotateCcw className="w-3.5 h-3.5 text-amber-700" />
-                        Catatan Dosen Pembimbing KLK (Perlu Perbaikan):
-                      </span>
-                      <p className="italic">&quot;{selectedKlk.catatanVerifikasiSuratMitraDosen || 'Mohon unggah ulang surat resmi instansi mitra berstempel basah/tanda tangan.'}&quot;</p>
-                    </div>
-                  )}
                 </div>
 
                 {/* Kartu Ringkasan Data Usulan KLK */}
@@ -17589,21 +18927,53 @@ ${instansiMitra}
             )}
 
             {/* KONDISI 3: BUKAN MAHASISWA ATAU MAHASISWA SUDAH MEMULAI KLK (LOGBOOK AKTIF) */}
-            {!showEmptyForStudent && selectedKlk && (
+            {!showEmptyForStudent && selectedKlk && filteredRoleScopedKlkList.length > 0 && (
               <div className="space-y-5">
-                {/* Dosen Read-Only Banner */}
+                {/* Dosen Read-Only / Pembimbing KLK Banner */}
                 {isDosen && (
-                  <div className="p-3.5 bg-blue-50/80 border border-blue-200 rounded-xl text-xs flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center shrink-0">
-                      <Eye className="w-4 h-4" />
+                  <div className={`p-3.5 rounded-xl text-xs flex items-start gap-3 border ${
+                    isDosenPembimbingKlkForSelected
+                      ? 'bg-blue-50/80 border-blue-200'
+                      : 'bg-slate-50 border-slate-300'
+                  }`}>
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center shrink-0 ${
+                      isDosenPembimbingKlkForSelected
+                        ? 'bg-blue-100 text-blue-700'
+                        : 'bg-slate-200 text-slate-600'
+                    }`}>
+                      {isDosenPembimbingKlkForSelected ? <Eye className="w-4 h-4" /> : <Lock className="w-4 h-4" />}
                     </div>
                     <div className="space-y-0.5">
-                      <div className="font-bold text-blue-900 flex items-center gap-2">
-                        <span>Halaman Logbook & Presensi (Read Only — Dosen Pembimbing)</span>
-                        <span className="text-[10px] px-2 py-0.5 rounded bg-blue-200 text-blue-800 font-semibold">Terhubung dengan Mahasiswa & Pembimbing Lapangan</span>
+                      <div className={`font-bold flex items-center gap-2 flex-wrap ${
+                        isDosenPembimbingKlkForSelected ? 'text-blue-900' : 'text-slate-800'
+                      }`}>
+                        <span>
+                          {isDosenPembimbingKlkForSelected
+                            ? 'Halaman Logbook & Presensi (Dosen Pembimbing KLK)'
+                            : 'Halaman Logbook & Presensi (Mode Read-Only — Dosen PA / Non-Pembimbing KLK)'}
+                        </span>
+                        <span className={`text-[10px] px-2 py-0.5 rounded font-semibold ${
+                          isDosenPembimbingKlkForSelected
+                            ? 'bg-blue-200 text-blue-800'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}>
+                          {isDosenPembimbingKlkForSelected
+                            ? 'Berwenang Memberi Tanggapan Logbook'
+                            : 'Hanya Baca (Read Only)'}
+                        </span>
                       </div>
-                      <p className="text-[11px] text-blue-800 leading-relaxed">
-                        Anda dapat meninjau logbook mingguan serta absensi harian mahasiswa secara langsung. Checklist dan validasi harian dilakukan oleh <strong>Pembimbing Lapangan ({selectedKlk.mentorIndustri || 'Mitra'})</strong>. Anda dapat memberikan <strong>Tanggapan / Arahan Dosen Pembimbing</strong> pada setiap entri mingguan di bawah ini.
+                      <p className={`text-[11px] leading-relaxed ${
+                        isDosenPembimbingKlkForSelected ? 'text-blue-800' : 'text-slate-600'
+                      }`}>
+                        {isDosenPembimbingKlkForSelected ? (
+                          <>
+                            Anda tercatat sebagai <strong>Dosen Pembimbing KLK ({selectedKlk.dosenPembimbingKLK})</strong> untuk mahasiswa ini. Anda dapat meninjau logbook &amp; presensi serta memberikan <strong>Tanggapan Dosen Pembimbing KLK</strong> pada setiap entri mingguan. Validasi harian tetap dilakukan oleh <strong>Pembimbing Lapangan ({selectedKlk.mentorIndustri || 'Mitra'})</strong>.
+                          </>
+                        ) : (
+                          <>
+                            Anda sedang melihat logbook mahasiswa dalam mode <strong>Read Only</strong>. Hanya <strong>Dosen Pembimbing KLK ({selectedKlk.dosenPembimbingKLK && !selectedKlk.dosenPembimbingKLK.includes('Belum Ditetapkan') ? selectedKlk.dosenPembimbingKLK : 'Belum Ditetapkan Admin'})</strong> yang berwenang memberikan atau mengubah tanggapan pada logbook mingguan ini.
+                          </>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -17651,7 +19021,33 @@ ${instansiMitra}
                 {tanggapanSuccessToast && (
                   <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center space-x-2 shadow-xs">
                     <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span className="font-medium">{tanggapanSuccessToast}</span>
+                    <span className="font-medium">Tanggapan Dosen Pembimbing KLK berhasil disimpan pada logbook mingguan!</span>
+                  </div>
+                )}
+
+                {mentorToastMessage && (
+                  <div
+                    className={`p-3 border rounded-xl text-xs flex items-center justify-between gap-2 shadow-xs transition-all ${
+                      mentorToastSuccess
+                        ? 'bg-emerald-50 border-emerald-300 text-emerald-900'
+                        : 'bg-amber-50 border-amber-300 text-amber-900'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      {mentorToastSuccess ? (
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                      )}
+                      <span className="font-semibold">{mentorToastMessage}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMentorToastMessage('')}
+                      className="text-slate-400 hover:text-slate-700 cursor-pointer p-0.5"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 )}
 
@@ -17785,9 +19181,21 @@ ${instansiMitra}
                       <div className="text-slate-500 text-[11px]">Dosen Pembimbing KLK:</div>
                       <div className="font-semibold text-slate-800">{selectedKlk.dosenPembimbingKLK || '-'}</div>
                     </div>
-                    <div className="p-3 bg-amber-50 rounded-lg border border-amber-200 text-amber-900 text-[11px] space-y-1">
-                      <span className="font-bold block">💡 Peran Dosen Pembimbing:</span>
-                      <span>Berikan tanggapan akademis atau masukan pada kartu logbook mingguan di sebelah kanan.</span>
+                    <div className={`p-3 rounded-lg border text-[11px] space-y-1 ${
+                      !isDosen || isDosenPembimbingKlkForSelected
+                        ? 'bg-amber-50 border-amber-200 text-amber-900'
+                        : 'bg-slate-100 border-slate-300 text-slate-700'
+                    }`}>
+                      <span className="font-bold block">
+                        {!isDosen || isDosenPembimbingKlkForSelected
+                          ? 'Peran Dosen Pembimbing KLK:'
+                          : 'Akses Dosen PA / Non-Pembimbing KLK:'}
+                      </span>
+                      <span>
+                        {!isDosen || isDosenPembimbingKlkForSelected
+                          ? 'Berikan tanggapan akademis atau masukan pada kartu logbook mingguan di sebelah kanan.'
+                          : `Mode Read Only. Hanya Dosen Pembimbing KLK (${selectedKlk.dosenPembimbingKLK || '-'}) yang dapat memberi tanggapan pada logbook mingguan.`}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -17885,54 +19293,63 @@ ${instansiMitra}
                             </div>
                           )}
 
-                          {/* Editor Tanggapan Dosen (Khusus Role Dosen) */}
+                          {/* Editor Tanggapan Dosen (Hanya Dosen Pembimbing KLK yang Ditetapkan) */}
                           {isDosen && (
                             <div className="pt-2 border-t border-slate-100">
-                              {editingTanggapanLogId === lb.id ? (
-                                <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
-                                  <label className="text-[11px] font-bold text-amber-900 block">
-                                    Form Tanggapan / Feedback Akademis Dosen:
-                                  </label>
-                                  <textarea
-                                    rows={3}
-                                    value={tanggapanInputText}
-                                    onChange={(e) => setTanggapanInputText(e.target.value)}
-                                    placeholder="Tuliskan arahan, tinjauan metodologi, atau feedback untuk mahasiswa bimbingan ini..."
-                                    className="w-full p-2 text-xs border border-amber-300 rounded-lg bg-white focus:ring-1 focus:ring-[#002B49]"
-                                  />
-                                  <div className="flex items-center justify-end gap-2">
+                              {isDosenPembimbingKlkForSelected ? (
+                                editingTanggapanLogId === lb.id ? (
+                                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+                                    <label className="text-[11px] font-bold text-amber-900 block">
+                                      Form Tanggapan / Feedback Akademis Dosen Pembimbing KLK:
+                                    </label>
+                                    <textarea
+                                      rows={3}
+                                      value={tanggapanInputText}
+                                      onChange={(e) => setTanggapanInputText(e.target.value)}
+                                      placeholder="Tuliskan arahan, tinjauan metodologi, atau feedback untuk mahasiswa bimbingan ini..."
+                                      className="w-full p-2 text-xs border border-amber-300 rounded-lg bg-white focus:ring-1 focus:ring-[#002B49]"
+                                    />
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button
+                                        type="button"
+                                        onClick={() => {
+                                          setEditingTanggapanLogId(null);
+                                          setTanggapanInputText('');
+                                        }}
+                                        className="px-3 py-1 text-[11px] rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 cursor-pointer"
+                                      >
+                                        Batal
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => handleSaveTanggapanDosen(selectedKlk.id, lb.id, tanggapanInputText)}
+                                        className="px-3 py-1 text-[11px] rounded-lg bg-[#002B49] text-white font-bold hover:bg-[#003865] cursor-pointer"
+                                      >
+                                        Simpan Tanggapan Dosen
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <div className="flex justify-end">
                                     <button
                                       type="button"
                                       onClick={() => {
-                                        setEditingTanggapanLogId(null);
-                                        setTanggapanInputText('');
+                                        setEditingTanggapanLogId(lb.id);
+                                        setTanggapanInputText(lb.tanggapanDosen || '');
                                       }}
-                                      className="px-3 py-1 text-[11px] rounded-lg bg-slate-200 text-slate-700 font-semibold hover:bg-slate-300 cursor-pointer"
+                                      className="px-3 py-1 text-[11px] font-bold rounded-lg border border-emerald-600 text-emerald-700 hover:bg-emerald-50 flex items-center gap-1.5 cursor-pointer"
                                     >
-                                      Batal
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleSaveTanggapanDosen(selectedKlk.id, lb.id, tanggapanInputText)}
-                                      className="px-3 py-1 text-[11px] rounded-lg bg-[#002B49] text-white font-bold hover:bg-[#003865] cursor-pointer"
-                                    >
-                                      Simpan Tanggapan Dosen
+                                      <MessageSquare className="w-3.5 h-3.5" />
+                                      <span>{lb.tanggapanDosen ? 'Edit Tanggapan Dosen' : '+ Beri Tanggapan Dosen'}</span>
                                     </button>
                                   </div>
-                                </div>
+                                )
                               ) : (
                                 <div className="flex justify-end">
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      setEditingTanggapanLogId(lb.id);
-                                      setTanggapanInputText(lb.tanggapanDosen || '');
-                                    }}
-                                    className="px-3 py-1 text-[11px] font-bold rounded-lg border border-emerald-600 text-emerald-700 hover:bg-emerald-50 flex items-center gap-1.5 cursor-pointer"
-                                  >
-                                    <MessageSquare className="w-3.5 h-3.5" />
-                                    <span>{lb.tanggapanDosen ? 'Edit Tanggapan Dosen' : '+ Beri Tanggapan Dosen'}</span>
-                                  </button>
+                                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 text-slate-500 border border-slate-200 text-[10.5px] font-semibold">
+                                    <Lock className="w-3 h-3 text-slate-400" />
+                                    <span>Read Only &bull; Khusus Dosen Pembimbing KLK ({selectedKlk.dosenPembimbingKLK && !selectedKlk.dosenPembimbingKLK.includes('Belum Ditetapkan') ? selectedKlk.dosenPembimbingKLK : 'Belum Ditetapkan'})</span>
+                                  </span>
                                 </div>
                               )}
                             </div>
@@ -18128,9 +19545,29 @@ ${instansiMitra}
                             </div>
                           </div>
 
-                          <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-[11px] text-slate-600 space-y-1">
-                            <span className="font-bold text-slate-800 block">Keterangan Verifikasi:</span>
-                            <span>Checklist laporan harian & presensi divalidasi oleh <strong>{selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'}</strong> secara berkala.</span>
+                          <div className={`p-3 rounded-lg border text-[11px] space-y-1 ${
+                            isUserEksternal
+                              ? 'bg-amber-50/80 border-amber-300 text-amber-900'
+                              : 'bg-slate-50 border-slate-200 text-slate-600'
+                          }`}>
+                            <span className="font-bold flex items-center gap-1.5">
+                              {isUserEksternal ? (
+                                <>
+                                  <CheckSquare className="w-3.5 h-3.5 text-amber-700" />
+                                  <span>Otorisasi Checklist Aktif:</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                                  <span>Mode Read Only (Khusus Pembimbing Lapangan):</span>
+                                </>
+                              )}
+                            </span>
+                            <span>
+                              {isUserEksternal
+                                ? `Anda masuk sebagai User Eksternal (${effectiveUser?.nama || selectedKlk.mentorIndustri || 'Pembimbing Lapangan'}). Anda memiliki otorisasi penuh untuk checklist presensi dan aktivitas harian mahasiswa.`
+                                : `Checklist presensi dan aktivitas harian hanya dapat dilakukan oleh User Eksternal (${selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'}). Peran Anda (${currentRole}) berstatus Read Only.`}
+                            </span>
                           </div>
                         </div>
                       );
@@ -18142,11 +19579,23 @@ ${instansiMitra}
                 <div className="lg:col-span-2 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
                     <div>
-                      <h3 className="text-sm font-bold text-slate-800">
-                        Rekap Absen & Aktivitas Harian Mahasiswa
+                      <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 flex-wrap">
+                        <span>Rekap Absen &amp; Aktivitas Harian Mahasiswa</span>
+                        {isUserEksternal ? (
+                          <span className="text-[10px] px-2 py-0.5 bg-amber-100 text-amber-900 font-bold rounded-md border border-amber-300">
+                            Akses Mentor (Bisa Checklist)
+                          </span>
+                        ) : (
+                          <span className="text-[10px] px-2 py-0.5 bg-slate-100 text-slate-600 font-medium rounded-md border border-slate-200 flex items-center gap-1">
+                            <Lock className="w-3 h-3 text-slate-400" />
+                            Mode Read Only
+                          </span>
+                        )}
                       </h3>
                       <p className="text-[11px] text-slate-500">
-                        Otorisasi checklist oleh Pembimbing Lapangan ({selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'})
+                        {isUserEksternal
+                          ? `Otorisasi checklist aktif untuk Pembimbing Lapangan (${selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'})`
+                          : `Otorisasi checklist khusus untuk Pembimbing Lapangan (${selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'}). Pengguna lain hanya dapat memantau.`}
                       </p>
                     </div>
                     <span className="text-[11px] px-2.5 py-1 bg-slate-100 font-semibold rounded-lg text-slate-700 self-start sm:self-auto">
@@ -18162,15 +19611,26 @@ ${instansiMitra}
                           <CheckSquare className="w-4 h-4 text-[#D4AF37]" />
                           <span>Checklist Pembimbing Lapangan ({selectedKlk.mentorIndustri || 'Pembimbing Lapangan Mitra'}):</span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => handleChecklistAllAbsenMentor(selectedKlk.id)}
-                          className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003861] text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs shrink-0"
-                          title="Verifikasi sekaligus seluruh entri absen harian (Khusus Pembimbing Lapangan bersangkutan)"
-                        >
-                          <CheckCircle2 className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>✓ Checklist Semua Absen Valid</span>
-                        </button>
+                        {isUserEksternal ? (
+                          <button
+                            type="button"
+                            id="btn-mentor-checklist-all-absen-main"
+                            onClick={() => handleChecklistAllAbsenMentor(selectedKlk.id)}
+                            className="px-3 py-1.5 bg-[#002B49] hover:bg-[#003861] active:bg-[#001f35] text-white text-[11px] font-bold rounded-lg transition-all flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs shrink-0"
+                            title="Verifikasi sekaligus seluruh entri absen harian (Khusus User Eksternal / Pembimbing Lapangan)"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5 text-[#D4AF37]" />
+                            <span>✓ Checklist Semua Absen Valid</span>
+                          </button>
+                        ) : (
+                          <span
+                            className="px-3 py-1.5 bg-slate-100 text-slate-500 text-[11px] font-medium rounded-lg border border-slate-200 flex items-center gap-1.5 shrink-0"
+                            title="Checklist semua absen valid hanya bisa dilakukan oleh User Eksternal (Pembimbing Lapangan)"
+                          >
+                            <Lock className="w-3.5 h-3.5 text-slate-400" />
+                            <span>Checklist Khusus Pembimbing Lapangan (Read Only)</span>
+                          </span>
+                        )}
                       </div>
 
                       {/* Tombol Checklist Sekaligus Per Minggu */}
@@ -18180,6 +19640,24 @@ ${instansiMitra}
                           const absInWeek = getOrInitAbsenHarian(selectedKlk).filter((ab, idx) => (ab.mingguKe || (Math.floor(idx / 5) + 1)) === wNum);
                           if (absInWeek.length === 0) return null;
                           const allVerifiedInWeek = absInWeek.every((ab) => ab.statusVerifikasiMentor === 'Terverifikasi' || ab.statusVerifikasiMentor === 'Terverifikasi Mentor');
+                          
+                          if (!isUserEksternal) {
+                            return (
+                              <span
+                                key={wNum}
+                                className={`px-2.5 py-1 text-[10px] font-semibold rounded-lg border flex items-center gap-1 ${
+                                  allVerifiedInWeek
+                                    ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                                    : 'bg-slate-50 text-slate-500 border-slate-200'
+                                }`}
+                                title="Mode Read Only: Hanya User Eksternal (Pembimbing Lapangan) yang dapat checklist"
+                              >
+                                {allVerifiedInWeek ? <CheckCircle2 className="w-3 h-3 text-emerald-600" /> : <Calendar className="w-3 h-3 text-slate-400" />}
+                                <span>Minggu {wNum} ({absInWeek.length} Hari)</span>
+                              </span>
+                            );
+                          }
+
                           return (
                             <button
                               key={wNum}
@@ -18259,28 +19737,46 @@ ${instansiMitra}
                                   )}
                                 </td>
                                 <td className="p-2.5 whitespace-nowrap">
-                                  <button
-                                    type="button"
-                                    onClick={() => handleChecklistAbsenMentor(selectedKlk.id, abs.id, undefined, true)}
-                                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer shadow-2xs ${
-                                      isTerverifikasi
-                                        ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-300'
-                                        : 'bg-[#002B49] hover:bg-[#003861] text-white border-[#002B49]'
-                                    }`}
-                                    title={isTerverifikasi ? "Klik untuk membatalkan status terverifikasi" : "Klik untuk checklist & verifikasi kehadiran hari ini"}
-                                  >
-                                    {isTerverifikasi ? (
-                                      <>
-                                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
-                                        <span>✓ Terverifikasi</span>
-                                      </>
-                                    ) : (
-                                      <>
-                                        <Check className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
-                                        <span>+ Checklist Mentor</span>
-                                      </>
-                                    )}
-                                  </button>
+                                  {isUserEksternal ? (
+                                    <button
+                                      type="button"
+                                      onClick={() => handleChecklistAbsenMentor(selectedKlk.id, abs.id, undefined, true)}
+                                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all cursor-pointer shadow-2xs ${
+                                        isTerverifikasi
+                                          ? 'bg-emerald-100 hover:bg-emerald-200 text-emerald-900 border-emerald-300'
+                                          : 'bg-[#002B49] hover:bg-[#003861] text-white border-[#002B49]'
+                                      }`}
+                                      title={isTerverifikasi ? "Klik untuk membatalkan status terverifikasi" : "Klik untuk checklist & verifikasi kehadiran hari ini"}
+                                    >
+                                      {isTerverifikasi ? (
+                                        <>
+                                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                          <span>✓ Terverifikasi</span>
+                                        </>
+                                      ) : (
+                                        <>
+                                          <Check className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                                          <span>+ Checklist Mentor</span>
+                                        </>
+                                      )}
+                                    </button>
+                                  ) : isTerverifikasi ? (
+                                    <span
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-200 shadow-2xs"
+                                      title={`Telah diverifikasi oleh ${abs.diverifikasiOleh || 'Pembimbing Lapangan'}`}
+                                    >
+                                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                                      <span>✓ Terverifikasi Mentor</span>
+                                    </span>
+                                  ) : (
+                                    <span
+                                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200 shadow-2xs"
+                                      title="Menunggu checklist oleh Pembimbing Lapangan (Hanya User Eksternal yang dapat checklist)"
+                                    >
+                                      <Clock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                      <span>Menunggu Checklist</span>
+                                    </span>
+                                  )}
                                 </td>
                               </tr>
                             );
@@ -18521,56 +20017,43 @@ ${instansiMitra}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Sisi Kiri: Form Input untuk Mahasiswa, ATAU Ringkasan Mahasiswa untuk Dosen/Admin */}
               {isMahasiswa ? (
-                !activeKlk?.suratMitraDisetujuiDosen && klkSimulationMode !== 'sudah_mulai' ? (
+                !hasStudentStartedKlk(activeKlk) && klkSimulationMode !== 'sudah_mulai' ? (
                   <div className="lg:col-span-1 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
                     <div className="flex items-center space-x-2 text-sm font-bold text-slate-800 border-b border-slate-200 pb-3">
                       <Lock className="w-4 h-4 text-amber-600" />
                       <span>Sesi Bimbingan Dosen Terkunci</span>
                     </div>
 
-                    {activeKlk?.dokumenSuratBalasanMitra || activeKlk?.suratBalasanTerkirimKeDosen ? (
-                      <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-3 text-xs text-amber-950">
-                        <div className="flex items-start gap-2.5">
-                          <Clock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="font-bold text-amber-900">Menunggu Pengecekan &amp; Persetujuan Dosen</p>
-                            <p className="text-[11px] text-amber-800 mt-1 leading-relaxed">
-                              Anda telah mengirimkan berkas Surat Penerimaan dari instansi mitra <strong>{activeKlk?.namaMitra}</strong> kepada Dosen Pembimbing KLK ({activeKlk?.dosenPembimbingKLK && !activeKlk?.dosenPembimbingKLK.includes('Belum Ditetapkan') ? activeKlk.dosenPembimbingKLK : (activeKlk?.dpaNama || 'Dosen Pembimbing KLK')}).
-                            </p>
-                          </div>
+                    <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs text-slate-700">
+                      <div className="flex items-start gap-2.5">
+                        <Lock className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-bold text-slate-800">
+                            {activeKlk?.statusResponMitra === 'Diterima'
+                              ? 'Wajib Upload Surat Penerimaan Perusahaan'
+                              : 'Menunggu Persetujuan & Upload Surat Mitra'}
+                          </p>
+                          <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                            {activeKlk?.statusResponMitra === 'Diterima'
+                              ? `Anda dinyatakan Diterima di ${activeKlk?.namaMitra}. Silakan unggah & kirimkan Surat Penerimaan dari perusahaan/mitra ke Dosen Pembimbing KLK melalui Tab Form Pengajuan KLK agar fitur Bimbingan Dosen & Logbook Mingguan langsung terbuka.`
+                              : 'Sesi bimbingan Dosen Pembimbing KLK akan terbuka setelah pengajuan disetujui Admin TU, dinyatakan diterima perusahaan/mitra, dan Anda mengunggah Surat Penerimaan Perusahaan ke Dosen Pembimbing KLK.'}
+                          </p>
                         </div>
-
-                        <div className="bg-white p-2.5 rounded-lg border border-amber-300 text-[11px] space-y-1">
-                          <div className="text-slate-600 truncate">Dokumen: <strong className="text-slate-900 font-mono">{activeKlk?.dokumenSuratBalasanMitra || 'Surat_Penerimaan_Mitra.pdf'}</strong></div>
-                          <div className="text-slate-600">Status: <span className="font-bold text-amber-700">Menunggu Verifikasi Dosen</span></div>
-                        </div>
-
-                        <p className="text-[11px] text-slate-600 italic">
-                          Form pencatatan sesi bimbingan akan terbuka otomatis segera setelah Dosen Pembimbing KLK memeriksa dan menyetujui berkas surat dari mitra.
-                        </p>
                       </div>
-                    ) : (
-                      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3 text-xs text-slate-700">
-                        <div className="flex items-start gap-2.5">
-                          <Lock className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
-                          <div>
-                            <p className="font-bold text-slate-800">Menunggu Surat Penerimaan Mitra</p>
-                            <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
-                              Sesi bimbingan Dosen Pembimbing KLK baru dapat dicatat setelah Anda mengunggah Surat Penerimaan dari instansi mitra dan disetujui oleh Dosen Pembimbing KLK.
-                            </p>
-                          </div>
-                        </div>
 
-                        <button
-                          type="button"
-                          onClick={() => setSubTab('form-baru')}
-                          className="w-full py-2 bg-[#002B49] text-white rounded-lg font-bold text-xs hover:bg-[#003865] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
-                        >
-                          <PlusCircle className="w-3.5 h-3.5 text-[#D4AF37]" />
-                          <span>Buka Form Pengajuan KLK</span>
-                        </button>
-                      </div>
-                    )}
+                      <button
+                        type="button"
+                        onClick={() => setSubTab('form-baru')}
+                        className="w-full py-2 bg-[#002B49] text-white rounded-lg font-bold text-xs hover:bg-[#003865] transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+                      >
+                        <Upload className="w-3.5 h-3.5 text-[#D4AF37]" />
+                        <span>
+                          {activeKlk?.statusResponMitra === 'Diterima'
+                            ? 'Upload Surat Perusahaan Sekarang'
+                            : 'Buka Form Pengajuan KLK'}
+                        </span>
+                      </button>
+                    </div>
                   </div>
                 ) : (
                 <div id="form-bimbingan-container" className="lg:col-span-1 bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
@@ -18959,7 +20442,7 @@ ${instansiMitra}
       })()}
 
       {/* TAB 5: SEMINAR & PENILAIAN AKHIR KLK */}
-      {subTab === 'penilaian-seminar' && (
+      {subTab === 'penilaian-seminar' && canShowSeminarNilaiTab && (
         <div className="space-y-6">
           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3">
             <div className="flex items-center space-x-3">
@@ -20191,7 +21674,7 @@ ${instansiMitra}
       {/* MODAL TERPADU DETAIL & JEJAK AKTIVITAS MAHASISWA BIMBINGAN KLK (SINGLE MODAL) */}
       {/* ========================================================================= */}
       {modalTerpaduMahasiswaOpen && selectedTerpaduKlk && (() => {
-        const item = selectedTerpaduKlk;
+        const item = klkList.find((k) => k.id === selectedTerpaduKlk.id) || selectedTerpaduKlk;
         const selectedNimClean = (item.nim || '').replace(/\D/g, '');
 
         // Kumpulkan SELURUH pengajuan/usulan historical mahasiswa yang bersangkutan (by NIM / ID / Nama)
@@ -20207,6 +21690,51 @@ ${instansiMitra}
             const tB = (b as any).timestamp || (b.waktuSubmit ? new Date(b.waktuSubmit).getTime() : 0);
             return tA - tB; // urutan kronologis dari usulan pertama
           });
+
+        // Gabungkan seluruh versi usulan mitra (termasuk riwayatVersiForm dari penolakan/revisi/pergantian mitra sebelumnya)
+        const terpaduUsulanHistory: Array<
+          RiwayatVersiFormKLK & {
+            parentKlkId: string;
+            isArchivedVersion: boolean;
+          }
+        > = [];
+
+        studentSubmissions.forEach((sub) => {
+          const archivedVersions = Array.isArray(sub.riwayatVersiForm) ? sub.riwayatVersiForm : [];
+          archivedVersions.forEach((v) => {
+            terpaduUsulanHistory.push({
+              ...v,
+              dpaNama: v.dpaNama || sub.dpaNama,
+              parentKlkId: sub.id,
+              isArchivedVersion: true
+            });
+          });
+
+          terpaduUsulanHistory.push({
+            id: sub.id,
+            kodePendaftaran: sub.kodePendaftaran,
+            waktuSubmit: sub.waktuSubmit || '-',
+            skema: sub.skema,
+            namaMitra: sub.namaMitra,
+            alamatMitra: sub.alamatMitra,
+            bidangPekerjaan: sub.bidangPekerjaan,
+            mentorIndustri: sub.mentorIndustri,
+            tanggalMulai: sub.tanggalMulai,
+            tanggalSelesai: sub.tanggalSelesai,
+            semester: sub.semester,
+            namaSemester: sub.namaSemester,
+            sksDiakui: sub.sksDiakui,
+            status: sub.status,
+            statusVerifikasiDosen: sub.statusVerifikasiDosen,
+            statusResponMitra: sub.statusResponMitra,
+            dpaNama: sub.dpaNama,
+            catatanVerifikasi: sub.catatanVerifikasi,
+            catatanVerifikasiDosen: sub.catatanVerifikasiDosen,
+            nomorSuratTugas: sub.nomorSuratTugas,
+            parentKlkId: sub.id,
+            isArchivedVersion: false
+          });
+        });
 
         // Gabungkan seluruh jejak riwayat aktivitas dari semua pengajuan mahasiswa (deduplikasi ID & urutkan dari terbaru ke terlama)
         const combinedRiwayatMap = new Map<string, ItemRiwayatKLK>();
@@ -20364,14 +21892,21 @@ ${instansiMitra}
                       </h4>
                     </div>
                     <span className="text-[10px] font-bold px-2 py-0.5 bg-purple-50 text-purple-900 rounded border border-purple-200">
-                      {studentSubmissions.length} Usulan Terdaftar
+                      {terpaduUsulanHistory.length} Usulan Terdaftar
                     </span>
                   </div>
 
                   <div className="space-y-3">
-                    {studentSubmissions.map((sub, sIdx) => {
-                      const isCurrentActive = sub.id === item.id || sub.statusVerifikasiDosen === 'Disetujui Dosen' || sub.status === 'Disetujui / Sedang Berjalan';
-                      const subIsDitolak = sub.statusVerifikasiDosen === 'Ditolak' || sub.status === 'Ditolak';
+                    {terpaduUsulanHistory.map((sub, sIdx) => {
+                      const isCurrentActive =
+                        !sub.isArchivedVersion &&
+                        (sub.id === item.id || sub.statusVerifikasiDosen === 'Disetujui Dosen' || sub.status === 'Disetujui / Sedang Berjalan');
+                      const subIsDitolak =
+                        sub.statusVerifikasiDosen === 'Ditolak' ||
+                        sub.status === 'Ditolak' ||
+                        sub.statusResponMitra === 'Ditolak';
+                      const subIsRevisi = sub.statusVerifikasiDosen === 'Perlu Revisi' || sub.status === 'Perlu Revisi';
+                      const reasonNote = sub.catatanVerifikasiDosen || sub.catatanVerifikasi || sub.alasanPerubahan;
 
                       return (
                         <div
@@ -20379,6 +21914,8 @@ ${instansiMitra}
                           className={`p-3.5 rounded-xl border text-xs space-y-2 transition ${
                             subIsDitolak
                               ? 'bg-rose-50/70 border-rose-200'
+                              : subIsRevisi
+                              ? 'bg-amber-50/70 border-amber-200'
                               : isCurrentActive
                               ? 'bg-emerald-50/70 border-emerald-300 ring-1 ring-emerald-400/30'
                               : 'bg-slate-50 border-slate-200'
@@ -20389,21 +21926,33 @@ ${instansiMitra}
                               <span className={`px-2 py-0.5 rounded font-extrabold text-[10.5px] ${
                                 subIsDitolak
                                   ? 'bg-rose-200 text-rose-900'
+                                  : subIsRevisi
+                                  ? 'bg-amber-200 text-amber-900'
                                   : isCurrentActive
                                   ? 'bg-emerald-200 text-emerald-950'
                                   : 'bg-slate-200 text-slate-800'
                               }`}>
-                                Usulan Ke-{sIdx + 1} {isCurrentActive ? '(Aktif)' : ''}
+                                Usulan Ke-{sIdx + 1} {isCurrentActive ? '(Aktif)' : sub.isArchivedVersion ? '(Riwayat Sebelumnya)' : ''}
                               </span>
                               <span className="font-bold text-slate-900 text-xs sm:text-sm">{sub.namaMitra}</span>
                               <span className="text-[10px] font-mono text-slate-500">({sub.skema} &bull; {sub.sksDiakui} SKS)</span>
                             </div>
 
                             <div className="shrink-0">
-                              {subIsDitolak ? (
+                              {sub.statusResponMitra === 'Ditolak' ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
                                   <XCircle className="w-3 h-3 text-rose-600" />
-                                  <span>Status DPA: Ditolak</span>
+                                  <span>Ditolak Instansi Mitra</span>
+                                </span>
+                              ) : subIsDitolak ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-300">
+                                  <XCircle className="w-3 h-3 text-rose-600" />
+                                  <span>Status: Ditolak {sub.statusVerifikasiDosen === 'Ditolak' ? 'DPA' : 'Admin'}</span>
+                                </span>
+                              ) : subIsRevisi ? (
+                                <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
+                                  <RotateCcw className="w-3 h-3 text-amber-700" />
+                                  <span>Perlu Revisi {sub.isArchivedVersion ? '(Sudah Diganti)' : ''}</span>
                                 </span>
                               ) : sub.statusVerifikasiDosen === 'Disetujui Dosen' || sub.status === 'Disetujui / Sedang Berjalan' ? (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-300">
@@ -20413,7 +21962,7 @@ ${instansiMitra}
                               ) : (
                                 <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-900 border border-amber-300">
                                   <Clock className="w-3 h-3 text-amber-600" />
-                                  <span>Status: {sub.statusVerifikasiDosen || sub.status}</span>
+                                  <span>Status: {sub.isArchivedVersion ? 'Diganti / Diperbarui' : (sub.statusVerifikasiDosen || sub.status)}</span>
                                 </span>
                               )}
                             </div>
@@ -20430,17 +21979,30 @@ ${instansiMitra}
                             </div>
                           </div>
 
-                          {sub.catatanVerifikasiDosen && (
+                          {reasonNote && (
                             <div className={`p-2.5 rounded-lg text-[11px] leading-relaxed font-medium border ${
                               subIsDitolak
                                 ? 'bg-white/90 border-rose-200 text-rose-900'
+                                : subIsRevisi
+                                ? 'bg-white/90 border-amber-200 text-amber-950'
                                 : 'bg-white/90 border-slate-200 text-slate-700'
                             }`}>
                               <div className="font-bold text-[10px] uppercase mb-0.5 flex items-center gap-1">
                                 {subIsDitolak ? <AlertCircle className="w-3 h-3 text-rose-600" /> : <Info className="w-3 h-3 text-slate-500" />}
-                                <span>Catatan &amp; Alasan Verifikasi DPA ({sub.dpaNama || 'DPA'}):</span>
+                                <span>
+                                  {sub.catatanVerifikasiDosen
+                                    ? `Catatan & Alasan Verifikasi DPA (${sub.dpaNama || effectiveDpaNama}):`
+                                    : sub.catatanVerifikasi
+                                    ? 'Catatan & Alasan Admin TU:'
+                                    : 'Keterangan Pergantian / Perubahan Mitra:'}
+                                </span>
                               </div>
-                              &quot;{sub.catatanVerifikasiDosen}&quot;
+                              &quot;{reasonNote}&quot;
+                              {sub.alasanPerubahan && (sub.catatanVerifikasiDosen || sub.catatanVerifikasi) && (
+                                <div className="mt-1 text-[10.5px] text-slate-600 not-italic font-normal">
+                                  Tindak Lanjut: <strong>{sub.alasanPerubahan}</strong>
+                                </div>
+                              )}
                             </div>
                           )}
                         </div>
@@ -21360,12 +22922,11 @@ ${instansiMitra}
                         onChange={(e) => setEditKlkForm({ ...editKlkForm, sksDiakui: Number(e.target.value) })}
                         className="w-full p-2 border border-slate-300 rounded-lg text-xs font-bold text-slate-800 focus:ring-2 focus:ring-[#002B49]"
                       >
-                        <option value={3}>3 SKS (Mata Kuliah KLK Inti)</option>
-                        <option value={7}>7 SKS (KLK + Pengayaan Pengetahuan)</option>
-                        <option value={10}>10 SKS (KLK + 2 MK Terapan)</option>
-                        <option value={13}>13 SKS (KLK + 3 MK Terapan)</option>
-                        <option value={16}>16 SKS (KLK + 4 MK Terapan)</option>
-                        <option value={20}>20 SKS (Full Semester)</option>
+                        <option value={4}>4 SKS (Paket PKL Inti)</option>
+                        <option value={7}>7 SKS (PKL + Pengayaan Pengetahuan)</option>
+                        <option value={10}>10 SKS (Magang + MK Terapan)</option>
+                        <option value={13}>13 SKS (Magang + 3 MK Terapan)</option>
+                        <option value={16}>16 SKS (Magang Berdampak Penuh)</option>
                       </select>
                     </div>
 
@@ -21881,6 +23442,951 @@ ${instansiMitra}
           </div>
         </div>
       )}
+
+      {/* ======================================================= */}
+      {/* MODAL SURAT PENGANTAR KE PERUSAHAAN (ADMIN VERIFIKASI KLK) */}
+      {/* ======================================================= */}
+      {suratPengantarAdminModalOpen && suratPengantarDraft && (
+        <div className="fixed inset-0 z-[85] flex items-center justify-center p-3 sm:p-5 bg-black/65 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[94vh] flex flex-col overflow-hidden border border-slate-200">
+            {/* Header Modal */}
+            <div className="bg-[#002B49] text-white px-5 py-4 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-white/10 text-[#D4AF37] flex items-center justify-center border border-white/20 shrink-0">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="font-bold text-sm sm:text-base text-white">
+                      Surat Pengantar KLK ke Perusahaan / Mitra
+                    </h3>
+                    {suratPengantarReadOnlyMode ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-400 text-[#002B49]">
+                        Dikirim oleh Admin TU Departemen Kimia
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#D4AF37] text-[#002B49]">
+                        Dokumen Resmi Admin
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-blue-200">
+                    Tujuan: {suratPengantarDraft.namaMitra} &bull; Mahasiswa: {suratPengantarDraft.mahasiswaNama} ({suratPengantarDraft.nim})
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                id="btn-close-admin-surat-pengantar-modal"
+                onClick={() => setSuratPengantarAdminModalOpen(false)}
+                className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                title="Tutup"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body Modal: Panel Info/Edit Isi Surat + Pratinjau Lembar Surat A4 */}
+            <div className="p-4 sm:p-5 overflow-y-auto space-y-4 bg-slate-100 flex-1">
+              {suratPengantarReadOnlyMode ? (
+                <div className="bg-emerald-50 border border-emerald-300 rounded-xl p-3.5 flex items-start gap-2.5 text-xs text-emerald-950 shadow-2xs">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                  <div>
+                    <span className="font-extrabold block">
+                      Surat Pengantar Resmi dari Admin TU Departemen Kimia UB
+                    </span>
+                    <p className="text-[11px] text-emerald-800 mt-0.5 leading-relaxed">
+                      Dokumen surat pengantar ini telah disetujui dan dikirimkan ke akun Anda oleh Admin TU Departemen Kimia. Gunakan tombol <strong>Cetak Surat</strong> atau <strong>Download PDF</strong> di bawah untuk mengunduh/mencetak surat sebelum diserahkan ke pihak perusahaan/mitra.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg bg-blue-50 text-[#002B49] flex items-center justify-center border border-blue-200">
+                        <Pencil className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-extrabold text-slate-800 block">
+                          Pengaturan &amp; Edit Isi Surat Pengantar
+                        </span>
+                        <span className="text-[10px] text-slate-500">
+                          Klik <strong>Edit Isi Surat</strong> untuk mengubah redaksi paragraf pembuka, identitas/keperluan, penutup, maupun tembusan.
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <button
+                        type="button"
+                        id="btn-toggle-edit-isi-surat"
+                        onClick={() => setIsEditingIsiSurat((v) => !v)}
+                        className={`px-3.5 py-1.5 rounded-xl text-xs font-bold border transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs ${
+                          isEditingIsiSurat
+                            ? 'bg-amber-50 hover:bg-amber-100 text-amber-900 border-amber-300'
+                            : 'bg-[#002B49] hover:bg-[#003865] text-white border-[#002B49]'
+                        }`}
+                      >
+                        <Pencil className="w-3.5 h-3.5" />
+                        <span>{isEditingIsiSurat ? 'Tutup Editor Isi Surat' : 'Edit Isi Surat'}</span>
+                      </button>
+
+                      {isEditingIsiSurat && (
+                        <>
+                          <button
+                            type="button"
+                            id="btn-reset-edit-isi-surat"
+                            onClick={() => {
+                              const targetKlk =
+                                klkList.find((k) => k.id === suratPengantarAdminKlkId) ||
+                                selectedVerifikasiKlk;
+                              if (!targetKlk) return;
+                              resetCustomSuratPengantarForKlk(targetKlk.id);
+                              const freshDefaults = buildDefaultSuratPengantarData(targetKlk, mahasiswaList);
+                              setSuratPengantarDraft(freshDefaults);
+                              setSuratPengantarSaveNotice('Isi surat dikembalikan ke format standar default.');
+                              setTimeout(() => setSuratPengantarSaveNotice(null), 3500);
+                            }}
+                            className="px-3 py-1.5 rounded-xl text-xs font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 transition-colors cursor-pointer flex items-center gap-1"
+                          >
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>Reset Default</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            id="btn-simpan-edit-isi-surat"
+                            onClick={() => {
+                              if (!suratPengantarDraft || !suratPengantarAdminKlkId) return;
+                              saveCustomSuratPengantarForKlk(suratPengantarAdminKlkId, suratPengantarDraft);
+                              setIsEditingIsiSurat(false);
+                              const targetKlk = klkList.find((k) => k.id === suratPengantarAdminKlkId);
+                              const isTargetApproved =
+                                targetKlk &&
+                                (targetKlk.status === 'Disetujui' ||
+                                  targetKlk.status === 'Disetujui / Sedang Berjalan' ||
+                                  targetKlk.status === 'Selesai & Dinilai');
+                              setSuratPengantarSaveNotice(
+                                isTargetApproved
+                                  ? 'Perubahan isi surat berhasil disimpan, disinkronkan ke portal mahasiswa, dan siap untuk cetak & PDF.'
+                                  : 'Perubahan isi surat berhasil disimpan dan akan ikut terkirim ke mahasiswa saat pengajuan disetujui.'
+                              );
+                              setTimeout(() => setSuratPengantarSaveNotice(null), 4000);
+                            }}
+                            className="px-3.5 py-1.5 rounded-xl text-xs font-bold bg-emerald-600 hover:bg-emerald-700 text-white transition-colors cursor-pointer flex items-center gap-1.5 shadow-2xs"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>Simpan Isi Surat</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+
+                  {suratPengantarSaveNotice && (
+                    <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-lg text-xs text-emerald-800 font-semibold flex items-center gap-2">
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                      <span>{suratPengantarSaveNotice}</span>
+                    </div>
+                  )}
+
+                {isEditingIsiSurat && (
+                  <div className="pt-2 border-t border-slate-200 space-y-3 text-xs">
+                    {/* Bagian 1: Header & Tujuan */}
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Nomor Surat (Kosong Default)
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.nomorSurat}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, nomorSurat: e.target.value } : prev
+                            )
+                          }
+                          placeholder="Kosong (isi manual jika perlu)"
+                          className="w-full px-2.5 py-1.5 bg-slate-50 border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Tanggal Surat
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.tanggalSurat}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, tanggalSurat: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Lampiran (Jumlah Berkas)
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.lampiran}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, lampiran: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Perihal
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.perihal}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, perihal: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Jabatan Penerima
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.tujuanJabatan}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, tujuanJabatan: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Perusahaan / Mitra Tujuan
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.namaMitra}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, namaMitra: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div>
+                        <label className="text-[11px] font-semibold text-slate-600 block mb-1">
+                          Alamat Perusahaan / Mitra
+                        </label>
+                        <input
+                          type="text"
+                          value={suratPengantarDraft.alamatMitra}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, alamatMitra: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Bagian 2: Paragraf Pembuka */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                        Paragraf Pembuka Isi Surat
+                      </label>
+                      <textarea
+                        rows={3}
+                        value={suratPengantarDraft.paragrafPembuka}
+                        onChange={(e) =>
+                          setSuratPengantarDraft((prev) =>
+                            prev ? { ...prev, paragrafPembuka: e.target.value } : prev
+                          )
+                        }
+                        className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                      />
+                    </div>
+
+                    {/* Bagian 3: Identitas Mahasiswa & Keperluan */}
+                    <div className="p-3 bg-slate-50 rounded-xl border border-slate-200 space-y-2.5">
+                      <span className="text-[11px] font-bold text-slate-700 block">
+                        Identitas Mahasiswa &amp; Keperluan Kegiatan
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Nama Mahasiswa
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.mahasiswaNama}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, mahasiswaNama: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            NIM
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.nim}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, nim: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Program Studi
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.programStudi}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, programStudi: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-4 gap-2.5">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Semester
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.semesterLabel}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, semesterLabel: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Skema Kegiatan
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.skema}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, skema: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Tanggal Mulai
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.tanggalMulai}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, tanggalMulai: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Tanggal Selesai
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.tanggalSelesai}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, tanggalSelesai: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Bidang Pekerjaan / Topik
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.bidangPekerjaan}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, bidangPekerjaan: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-semibold text-slate-500 block mb-0.5">
+                            Keperluan
+                          </label>
+                          <input
+                            type="text"
+                            value={suratPengantarDraft.keperluan}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, keperluan: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Bagian 4: Paragraf Penutup & Ucapan */}
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                      <div>
+                        <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                          Paragraf Penutup
+                        </label>
+                        <textarea
+                          rows={3}
+                          value={suratPengantarDraft.paragrafPenutup}
+                          onChange={(e) =>
+                            setSuratPengantarDraft((prev) =>
+                              prev ? { ...prev, paragrafPenutup: e.target.value } : prev
+                            )
+                          }
+                          className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                            Kalimat Penutup &amp; Terima Kasih
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={suratPengantarDraft.paragrafUcapan}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, paragrafUcapan: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[11px] font-bold text-slate-700 block mb-1">
+                            Tembusan (1 baris per penerima)
+                          </label>
+                          <textarea
+                            rows={2}
+                            value={suratPengantarDraft.tembusanText}
+                            onChange={(e) =>
+                              setSuratPengantarDraft((prev) =>
+                                prev ? { ...prev, tembusanText: e.target.value } : prev
+                              )
+                            }
+                            className="w-full px-3 py-1.5 bg-white border border-slate-300 rounded-lg text-xs text-slate-800 leading-relaxed focus:outline-hidden focus:ring-2 focus:ring-[#002B49]"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+              )}
+
+              {/* Pratinjau Lembar Surat Resmi */}
+              <div className="bg-white border border-slate-300 rounded-xl p-6 sm:p-10 shadow-sm font-serif text-slate-900 space-y-4">
+                {/* Kop Surat Resmi Departemen Kimia UB */}
+                <div className="text-center pb-3 border-b-4 border-double border-slate-900 leading-snug">
+                  <p className="text-[11px] uppercase tracking-wide">
+                    KEMENTERIAN PENDIDIKAN TINGGI, SAINS, DAN TEKNOLOGI
+                  </p>
+                  <p className="font-bold text-base uppercase tracking-wider">
+                    UNIVERSITAS BRAWIJAYA
+                  </p>
+                  <p className="font-bold text-xs sm:text-sm uppercase">
+                    FAKULTAS SAINS, TEKNOLOGI, DAN MATEMATIKA
+                  </p>
+                  <p className="font-bold text-xs sm:text-sm uppercase">
+                    DEPARTEMEN KIMIA
+                  </p>
+                  <p className="text-[10px] text-slate-600 mt-0.5">
+                    Jalan Veteran, Malang 65145, Jawa Timur, Indonesia &bull; Telp. (0341) 554403, 575838 &bull; Email: kimia@ub.ac.id
+                  </p>
+                </div>
+
+                {/* Nomor, Lampiran, Perihal & Tanggal */}
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2 text-xs">
+                  <table className="border-collapse">
+                    <tbody>
+                      <tr>
+                        <td className="w-20 py-0.5 align-top">Nomor</td>
+                        <td className="w-3 py-0.5 align-top">:</td>
+                        <td className="py-0.5 align-top font-medium">
+                          {suratPengantarDraft.nomorSurat || ''}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="w-20 py-0.5 align-top">Lampiran</td>
+                        <td className="w-3 py-0.5 align-top">:</td>
+                        <td className="py-0.5 align-top">{suratPengantarDraft.lampiran}</td>
+                      </tr>
+                      <tr>
+                        <td className="w-20 py-0.5 align-top">Perihal</td>
+                        <td className="w-3 py-0.5 align-top">:</td>
+                        <td className="py-0.5 align-top font-bold">{suratPengantarDraft.perihal}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <div className="text-right shrink-0">
+                    Malang, {suratPengantarDraft.tanggalSurat}
+                  </div>
+                </div>
+
+                {/* Perusahaan / Mitra Tujuan */}
+                <div className="text-xs leading-relaxed pt-1">
+                  <p>Kepada Yth.</p>
+                  <p className="font-bold">{suratPengantarDraft.tujuanJabatan}</p>
+                  <p className="font-bold text-sm">{suratPengantarDraft.namaMitra}</p>
+                  <p>{suratPengantarDraft.alamatMitra || 'Di Tempat'}</p>
+                </div>
+
+                {/* Isi Surat: Pembuka + Identitas Mahasiswa & Keperluan */}
+                <div className="text-xs leading-relaxed space-y-2.5 text-justify">
+                  <p>Dengan hormat,</p>
+                  <p className="whitespace-pre-line">{suratPengantarDraft.paragrafPembuka}</p>
+
+                  <div className="pl-3 sm:pl-5 py-1">
+                    <table className="w-full border-collapse text-xs">
+                      <tbody>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Nama Mahasiswa</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5 font-bold">{suratPengantarDraft.mahasiswaNama}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">NIM</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5 font-bold">{suratPengantarDraft.nim}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Program Studi</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">{suratPengantarDraft.programStudi}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Semester</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">{suratPengantarDraft.semesterLabel}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Skema Kegiatan</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">
+                            {suratPengantarDraft.skema} ({suratPengantarDraft.sksDiakui} SKS)
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Bidang Pekerjaan / Topik</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">{suratPengantarDraft.bidangPekerjaan}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Rencana Pelaksanaan</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">
+                            {suratPengantarDraft.tanggalMulai} s.d. {suratPengantarDraft.tanggalSelesai}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5 align-top">Keperluan</td>
+                          <td className="w-3 py-0.5 align-top">:</td>
+                          <td className="py-0.5">{suratPengantarDraft.keperluan}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p className="whitespace-pre-line">{suratPengantarDraft.paragrafPenutup}</p>
+                  <p className="whitespace-pre-line">{suratPengantarDraft.paragrafUcapan}</p>
+                </div>
+
+                {/* Tanda Tangan Elektronik Kepala Departemen Kimia */}
+                <div className="pt-4 flex justify-end text-xs">
+                  <div className="w-72 space-y-1.5">
+                    <div>
+                      <p>Malang, {suratPengantarDraft.tanggalSurat}</p>
+                      <p>Kepala Departemen Kimia,</p>
+                    </div>
+                    <div className="flex items-center gap-3 py-1">
+                      {suratPengantarQrUrl ? (
+                        <img
+                          src={suratPengantarQrUrl}
+                          alt="QR Tanda Tangan Elektronik Kepala Departemen Kimia"
+                          className="w-20 h-20 border border-slate-300 p-0.5 bg-white shrink-0"
+                        />
+                      ) : (
+                        <div className="w-20 h-20 border border-slate-300 flex items-center justify-center bg-slate-50 shrink-0">
+                          <QrCode className="w-10 h-10 text-[#002B49]" />
+                        </div>
+                      )}
+                      <div className="font-sans text-[10px] leading-snug text-slate-700">
+                        <p>Ditandatangani secara elektronik oleh:</p>
+                        <p className="font-bold text-[#002B49]">Kepala Departemen Kimia UB</p>
+                        <p className="font-bold text-emerald-700">Terverifikasi Digital (SIKMA-UB)</p>
+                      </div>
+                    </div>
+                    <div>
+                      <p className="font-bold underline">Prof. Anna Safitri, S.Si., M.Sc., Ph.D</p>
+                      <p>NIP. 198008132005022008</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Tembusan */}
+                <div className="pt-3 border-t border-slate-200 text-[11px] space-y-0.5">
+                  <p className="font-bold">Tembusan:</p>
+                  <div className="space-y-0.5">
+                    {(suratPengantarDraft.tembusanText || '')
+                      .split('\n')
+                      .map((l) => l.trim())
+                      .filter(Boolean)
+                      .map((line, idx) => (
+                        <p key={idx}>{line}</p>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Modal: Cetak & Download PDF */}
+            <div className="bg-slate-100 px-5 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                <button
+                  type="button"
+                  id="btn-modal-cetak-surat-pengantar-admin"
+                  onClick={() =>
+                    printSuratPengantarPerusahaan({
+                      ...suratPengantarDraft,
+                      qrDataUrl: suratPengantarQrUrl
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-[#002B49] font-bold text-xs rounded-xl border border-slate-300 shadow-2xs transition-colors cursor-pointer"
+                >
+                  <Printer className="w-4 h-4 text-[#002B49]" />
+                  <span>Cetak Surat</span>
+                </button>
+
+                <button
+                  type="button"
+                  id="btn-modal-download-surat-pengantar-admin"
+                  onClick={async () => {
+                    await downloadSuratPengantarPerusahaanPdf({
+                      ...suratPengantarDraft,
+                      qrDataUrl: suratPengantarQrUrl
+                    });
+                    setVerifikasiToastMessage(
+                      `Surat Pengantar KLK ke ${suratPengantarDraft.namaMitra} (${suratPengantarDraft.mahasiswaNama}) berhasil diunduh dalam format PDF.`
+                    );
+                    setVerifikasiToastSuccess(true);
+                    setTimeout(() => setVerifikasiToastSuccess(false), 4000);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#002B49] hover:bg-[#003865] text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  <Download className="w-4 h-4 text-[#D4AF37]" />
+                  <span>Download PDF</span>
+                </button>
+              </div>
+
+              <button
+                type="button"
+                id="btn-close-admin-surat-pengantar-footer"
+                onClick={() => setSuratPengantarAdminModalOpen(false)}
+                className="px-5 py-2 bg-white hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 shadow-2xs transition-colors cursor-pointer"
+              >
+                Tutup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ======================================================= */}
+      {/* MODAL PRATINJAU, DOWNLOAD & CETAK SURAT PERUSAHAAN / MITRA */}
+      {/* ======================================================= */}
+      {suratMitraPreviewKlk && (() => {
+        const storedMitraFile = getSuratBalasanFile(suratMitraPreviewKlk.id);
+        const dosenTujuanLabel =
+          suratMitraPreviewKlk.dosenPembimbingKLK &&
+          !suratMitraPreviewKlk.dosenPembimbingKLK.includes('Belum Ditetapkan')
+            ? suratMitraPreviewKlk.dosenPembimbingKLK
+            : suratMitraPreviewKlk.dpaNama || 'Dosen Pembimbing KLK';
+        const fileNameLabel =
+          storedMitraFile?.fileName ||
+          suratMitraPreviewKlk.dokumenSuratBalasanMitra ||
+          `Surat_Penerimaan_Resmi_${(suratMitraPreviewKlk.namaMitra || 'Mitra').replace(/[^a-zA-Z0-9]/g, '_')}.pdf`;
+        const isImg = isImageFile(storedMitraFile, fileNameLabel);
+        const isPdf = isPdfFile(storedMitraFile, fileNameLabel);
+        const hasUploadedBinary = Boolean(storedMitraFile?.dataUrl);
+        const showFilePreview =
+          suratMitraPreviewMode === 'file'
+            ? hasUploadedBinary
+            : suratMitraPreviewMode === 'structured'
+            ? false
+            : hasUploadedBinary && (isImg || isPdf);
+
+        return (
+          <div className="fixed inset-0 z-[95] flex items-center justify-center p-3 sm:p-5 bg-black/65 backdrop-blur-xs animate-in fade-in duration-150">
+            <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden border border-slate-200">
+              {/* Header Modal */}
+              <div className="bg-[#002B49] text-white px-5 py-4 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-300 flex items-center justify-center border border-emerald-400/30 shrink-0">
+                    <Building2 className="w-5 h-5" />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="font-bold text-sm sm:text-base text-white truncate">
+                      Surat Penerimaan Perusahaan / Mitra — {suratMitraPreviewKlk.namaMitra}
+                    </h3>
+                    <p className="text-xs text-blue-200 truncate">
+                      {suratMitraPreviewKlk.mahasiswaNama} ({suratMitraPreviewKlk.nim}) &bull; Ditujukan ke: {dosenTujuanLabel}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  id="btn-close-surat-mitra-preview-modal"
+                  onClick={() => setSuratMitraPreviewKlk(null)}
+                  className="w-8 h-8 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors cursor-pointer shrink-0"
+                  title="Tutup"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              {/* Body Pratinjau */}
+              <div className="p-5 overflow-y-auto bg-slate-100 flex-1 space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-xs">
+                  <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Nomor Surat Mitra</span>
+                    <strong className="text-slate-900 font-mono block truncate mt-0.5">
+                      {suratMitraPreviewKlk.nomorSuratBalasanMitra || '-'}
+                    </strong>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Tanggal Surat</span>
+                    <strong className="text-slate-900 block truncate mt-0.5">
+                      {suratMitraPreviewKlk.tanggalSuratBalasanMitra || '-'}
+                    </strong>
+                  </div>
+                  <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
+                    <span className="text-[10px] font-bold uppercase text-slate-500 block">Nama Berkas</span>
+                    <strong className="text-[#002B49] font-mono block truncate mt-0.5" title={fileNameLabel}>
+                      {fileNameLabel}
+                    </strong>
+                  </div>
+                </div>
+
+                {hasUploadedBinary && (
+                  <div className="flex flex-wrap items-center justify-between gap-2 bg-white p-2 rounded-xl border border-slate-200 shadow-2xs">
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        type="button"
+                        onClick={() => setSuratMitraPreviewMode('file')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                          showFilePreview
+                            ? 'bg-[#002B49] text-white shadow-2xs'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Dokumen Asli Unggahan</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setSuratMitraPreviewMode('structured')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition cursor-pointer flex items-center gap-1.5 ${
+                          !showFilePreview
+                            ? 'bg-[#002B49] text-white shadow-2xs'
+                            : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                        }`}
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Tampilan Surat Terstruktur</span>
+                      </button>
+                    </div>
+                    <span className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      Berkas Asli Tersimpan
+                    </span>
+                  </div>
+                )}
+
+                {showFilePreview && isImg && storedMitraFile?.dataUrl ? (
+                  <div className="bg-white border border-slate-300 rounded-xl p-4 shadow-xs text-center">
+                    <img
+                      src={storedMitraFile.dataUrl}
+                      alt={fileNameLabel}
+                      className="max-h-[58vh] mx-auto rounded-lg border border-slate-200 object-contain"
+                    />
+                  </div>
+                ) : showFilePreview && isPdf && storedMitraFile?.dataUrl ? (
+                  <PdfCanvasViewer
+                    dataUrl={storedMitraFile.dataUrl}
+                    fileName={fileNameLabel}
+                    onFallbackToStructured={() => setSuratMitraPreviewMode('structured')}
+                  />
+                ) : (
+                  <div className="space-y-3">
+                    {hasUploadedBinary && !isImg && !isPdf && showFilePreview && (
+                      <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-center justify-between gap-2">
+                        <span>
+                          Berkas <strong>{fileNameLabel}</strong> berformat dokumen teks/Word. Pratinjau terstruktur ditampilkan di bawah atau klik <strong>Download Surat</strong> untuk membuka berkas asli.
+                        </span>
+                      </div>
+                    )}
+                    <div className="bg-white border border-slate-300 rounded-xl p-6 sm:p-8 shadow-sm font-serif text-slate-900 space-y-4">
+                    <div className="text-center pb-3 border-b-4 border-double border-slate-900">
+                      <p className="font-bold text-sm sm:text-base uppercase tracking-wide">
+                        {suratMitraPreviewKlk.namaMitra}
+                      </p>
+                      <p className="text-[11px] text-slate-600 mt-0.5">
+                        {suratMitraPreviewKlk.alamatMitra || 'Alamat Instansi / Perusahaan Mitra'}
+                      </p>
+                    </div>
+                    <div className="text-center font-bold text-xs sm:text-sm underline">
+                      SURAT PENERIMAAN / BALASAN KLK MAHASISWA
+                    </div>
+                    <div className="text-xs space-y-1">
+                      <p>
+                        <strong>Nomor Surat:</strong> {suratMitraPreviewKlk.nomorSuratBalasanMitra || '-'}
+                      </p>
+                      <p>
+                        <strong>Tanggal Surat:</strong> {suratMitraPreviewKlk.tanggalSuratBalasanMitra || '-'}
+                      </p>
+                      <p>
+                        <strong>Ditujukan Kepada Yth.:</strong> {dosenTujuanLabel} (Dosen Pembimbing KLK Dept. Kimia UB)
+                      </p>
+                    </div>
+                    <p className="text-xs leading-relaxed text-justify">
+                      Dengan hormat, bersama ini kami menerangkan bahwa mahasiswa Program Studi Sarjana (S1) Kimia Universitas Brawijaya berikut telah resmi <strong>DITERIMA</strong> untuk melaksanakan Kegiatan Mahasiswa di Luar Kampus / Kuliah Lapangan Kimia (KLK):
+                    </p>
+                    <table className="w-full border-collapse text-xs">
+                      <tbody>
+                        <tr>
+                          <td className="w-44 py-0.5">Nama Mahasiswa</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5 font-bold">{suratMitraPreviewKlk.mahasiswaNama}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5">NIM</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5 font-bold">{suratMitraPreviewKlk.nim}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5">Skema &amp; Konversi SKS</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5">
+                            {suratMitraPreviewKlk.skema} ({suratMitraPreviewKlk.sksDiakui || 7} SKS)
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5">Bidang Pekerjaan</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5">{suratMitraPreviewKlk.bidangPekerjaan}</td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5">Periode Pelaksanaan</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5">
+                            {suratMitraPreviewKlk.tanggalMulai} s.d. {suratMitraPreviewKlk.tanggalSelesai}
+                          </td>
+                        </tr>
+                        <tr>
+                          <td className="w-44 py-0.5">Berkas Terlampir</td>
+                          <td className="w-3 py-0.5">:</td>
+                          <td className="py-0.5 font-sans font-semibold text-[#002B49]">{fileNameLabel}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {suratMitraPreviewKlk.catatanSuratBalasanMitra && (
+                      <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs font-sans italic text-slate-700">
+                        <strong>Catatan Pengantar Mahasiswa:</strong> &ldquo;{suratMitraPreviewKlk.catatanSuratBalasanMitra}&rdquo;
+                      </div>
+                    )}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer Modal */}
+              <div className="bg-slate-100 px-5 py-3 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <button
+                    type="button"
+                    id="btn-modal-cetak-surat-mitra"
+                    onClick={() => printSuratBalasanMitra(suratMitraPreviewKlk)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-white hover:bg-slate-50 text-[#002B49] font-bold text-xs rounded-xl border border-slate-300 shadow-2xs transition-colors cursor-pointer"
+                  >
+                    <Printer className="w-4 h-4 text-[#002B49]" />
+                    <span>Cetak Surat</span>
+                  </button>
+                  <button
+                    type="button"
+                    id="btn-modal-download-surat-mitra"
+                    onClick={() => downloadSuratBalasanMitra(suratMitraPreviewKlk)}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-[#002B49] hover:bg-[#003865] text-white font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+                  >
+                    <Download className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Download Surat</span>
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setSuratMitraPreviewKlk(null)}
+                  className="px-5 py-2 bg-white hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-300 shadow-2xs transition-colors cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ======================================================= */}
       {/* MODAL LAMPIRAN SURAT PENGANTAR KLK */}

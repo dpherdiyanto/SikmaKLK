@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BonBahanItem, DataBahanItem, DataLaboratoriumItem, UserRole, AuthUser } from '../../types/sikma';
+import { BonBahanItem, DataBahanItem, DataLaboratoriumItem, UserRole, AuthUser, isMahasiswaRole } from '../../types/sikma';
 import {
   FileSpreadsheet,
   Search,
@@ -196,7 +196,7 @@ export const BonBahanTab: React.FC<BonBahanTabProps> = ({
 
   const filteredBon = bonList.filter((item) => {
     // Role mahasiswa hanya dapat melihat data permohonan bon bahan miliknya sendiri
-    if (currentRole === 'mahasiswa' && !isOwnRecord(item)) {
+    if (isMahasiswaRole(currentRole) && !isOwnRecord(item)) {
       return false;
     }
 
@@ -616,7 +616,7 @@ export const BonBahanTab: React.FC<BonBahanTabProps> = ({
       tanggalPengajuan: new Date().toISOString().split('T')[0],
       namaPemohon: namaPemohon.trim(),
       identitasPemohon: identitasPemohon.trim(),
-      rolePemohon: (currentUser?.role as any) || 'mahasiswa',
+      rolePemohon: isMahasiswaRole(currentUser?.role) ? 'mahasiswa' : ((currentUser?.role as any) || 'mahasiswa'),
       namaLab,
       daftarBahan: daftarBahan.map((b) => ({
         namaBahan: b.namaBahan,
@@ -657,7 +657,7 @@ export const BonBahanTab: React.FC<BonBahanTabProps> = ({
       </div>
 
       {/* Banner Khusus Mahasiswa: Privasi & Hak Akses Data Milik Sendiri */}
-      {currentRole === 'mahasiswa' && (
+      {isMahasiswaRole(currentRole) && (
         <div className="bg-sky-50 border border-sky-200 rounded-xl p-3 flex items-center justify-between gap-3 text-xs text-sky-900 shadow-2xs">
           <div className="flex items-center gap-2.5">
             <div className="w-7 h-7 rounded-lg bg-sky-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
@@ -992,20 +992,20 @@ export const BonBahanTab: React.FC<BonBahanTabProps> = ({
                   <input
                     type="text"
                     required
-                    readOnly={currentRole === 'mahasiswa'}
+                    readOnly={isMahasiswaRole(currentRole)}
                     value={namaPemohon}
                     onChange={(e) => {
-                      if (currentRole === 'mahasiswa') return;
+                      if (isMahasiswaRole(currentRole)) return;
                       setNamaPemohon(e.target.value);
                     }}
                     className={`w-full px-3 py-2 rounded-lg border border-slate-200 text-xs focus:outline-none ${
-                      currentRole === 'mahasiswa'
+                      isMahasiswaRole(currentRole)
                         ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                         : 'bg-white focus:ring-2 focus:ring-[#002B49]/20'
                     }`}
                     placeholder="Nama mahasiswa / pemohon"
                   />
-                  {currentRole === 'mahasiswa' && (
+                  {isMahasiswaRole(currentRole) && (
                     <p className="text-[10px] text-slate-500 mt-1">Sesuai nama profil akun login</p>
                   )}
                 </div>
@@ -1014,20 +1014,20 @@ export const BonBahanTab: React.FC<BonBahanTabProps> = ({
                   <input
                     type="text"
                     required
-                    readOnly={currentRole === 'mahasiswa'}
+                    readOnly={isMahasiswaRole(currentRole)}
                     value={identitasPemohon}
                     onChange={(e) => {
-                      if (currentRole === 'mahasiswa') return;
+                      if (isMahasiswaRole(currentRole)) return;
                       setIdentitasPemohon(e.target.value);
                     }}
                     className={`w-full px-3 py-2 rounded-lg border border-slate-200 text-xs font-mono focus:outline-none ${
-                      currentRole === 'mahasiswa'
+                      isMahasiswaRole(currentRole)
                         ? 'bg-slate-100 text-slate-700 cursor-not-allowed'
                         : 'bg-white focus:ring-2 focus:ring-[#002B49]/20'
                     }`}
                     placeholder="NIM mahasiswa"
                   />
-                  {currentRole === 'mahasiswa' && (
+                  {isMahasiswaRole(currentRole) && (
                     <p className="text-[10px] text-slate-500 mt-1">Sesuai nomor identitas mahasiswa</p>
                   )}
                 </div>

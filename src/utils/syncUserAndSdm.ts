@@ -1,5 +1,5 @@
 import { UserAccountItem } from '../data/userList';
-import { Dosen, Mahasiswa, AdminStaff, PLPStaff, PembimbingLapanganStaff, UserRole, PengajuanKLK, LogbookLabItem, JadwalSeminar, SuratPengajuan, LabRiset } from '../types/sikma';
+import { Dosen, Mahasiswa, AdminStaff, PLPStaff, PembimbingLapanganStaff, UserRole, PengajuanKLK, LogbookLabItem, JadwalSeminar, SuratPengajuan, LabRiset, isMahasiswaRole, getMahasiswaJenjang, inferMahasiswaRoleFromText, normalizeMahasiswaRole } from '../types/sikma';
 
 // Helper: Extract Clean Initials
 export const getInitials = (str?: string): string => {
@@ -11,8 +11,23 @@ export const getInitials = (str?: string): string => {
   return (words[0][0] + words[1][0]).toUpperCase();
 };
 
-// Helper: Generate unique safe username
+// Helper: Generate unique safe username (NIM untuk Mahasiswa, NIP untuk Dosen/Admin/PLP, nama/ID untuk Eksternal & Super Admin)
 export const generateUsername = (nama?: string, identifier?: string, role?: string): string => {
+  const roleLower = (role || '').toLowerCase();
+  const isIdBasedRole =
+    roleLower === 'dosen' ||
+    roleLower === 'admin' ||
+    roleLower === 'plp' ||
+    roleLower === 'mhs' ||
+    roleLower.startsWith('mahasiswa');
+
+  if (isIdBasedRole && typeof identifier === 'string') {
+    const cleanNum = identifier.replace(/\D/g, '');
+    if (cleanNum.length >= 5) {
+      return cleanNum;
+    }
+  }
+
   const safeNama = typeof nama === 'string' ? nama : '';
   const cleanNama = safeNama
     .toLowerCase()
@@ -148,14 +163,14 @@ export const syncSdmToUserAccounts = (
   let addedCount = 0;
   let updatedCount = 0;
 
-  // 1. SINKRONISASI DOSEN
+  // 1. SINKRONISASI DOSEN (Gunakan NIP saja, tidak lagi gunakan NIDN untuk username/login)
   dosenList.forEach((d) => {
-    const dNip = d.nip || d.nidn || '';
+    const dNipClean = (d.nip || '').replace(/\D/g, '');
     const fullName = d.gelar ? `${d.nama}, ${d.gelar}`.trim() : d.nama.trim();
     const existingIdx = userMap.findIndex(
       (u) =>
         u.role === 'dosen' &&
-        (isUserMatchingEntity(u, d) || isIdentifierMatch(u.identifier, dNip) || isNameMatch(u.nama, d.nama))
+        (isUserMatchingEntity(u, d) || (dNipClean && isIdentifierMatch(u.identifier, dNipClean)) || isNameMatch(u.nama, d.nama))
     );
 
     const existing = existingIdx >= 0 ? userMap[existingIdx] : undefined;
@@ -164,9 +179,8 @@ export const syncSdmToUserAccounts = (
       ? `NIP. ${d.nip}`
       : existing?.identifier && existing.identifier.startsWith('NIP.')
       ? existing.identifier
-      : d.nidn
-      ? `NIDN. ${d.nidn}`
       : existing?.identifier || '';
+    const nextUsername = dNipClean || existing?.username || generateUsername(d.nama, '', 'dosen');
     const unitFormatted = d.unit || (d.lab ? `${d.lab} (KBK ${d.bidang})` : `KBK ${d.bidang} - Dept Kimia FMIPA UB`);
     const jabatanFormatted = d.jabatan || `${d.jabatanAkademik || 'Dosen'} & Dosen Pembimbing Skripsi`;
     const nextAvatar = getInitials(d.nama);
@@ -175,6 +189,7 @@ export const syncSdmToUserAccounts = (
 
     if (existingIdx >= 0 && existing) {
       const hasChanges =
+        existing.username !== nextUsername ||
         existing.nama !== fullName ||
         existing.avatarText !== nextAvatar ||
         existing.status !== userStatus ||
@@ -187,6 +202,7 @@ export const syncSdmToUserAccounts = (
       if (hasChanges) {
         userMap[existingIdx] = {
           ...existing,
+          username: nextUsername,
           nama: fullName,
           avatarText: nextAvatar,
           identifier: identifierFormatted,
@@ -199,7 +215,7 @@ export const syncSdmToUserAccounts = (
         updatedCount++;
       }
     } else {
-      const username = generateUsername(d.nama, dNip, 'dosen');
+      const username = dNipClean || generateUsername(d.nama, '', 'dosen');
       const newUser: UserAccountItem = {
         id: `usr-dos-${(d.id || '').replace(/^dos-/, '') || Date.now()}`,
         username,
@@ -225,13 +241,15 @@ export const syncSdmToUserAccounts = (
   mahasiswaList.forEach((m) => {
     const existingIdx = userMap.findIndex(
       (u) =>
-        u.role === 'mahasiswa' &&
+        isMahasiswaRole(u.role) &&
         (isUserMatchingEntity(u, m) || isIdentifierMatch(u.identifier, m.nim) || isNameMatch(u.nama, m.nama))
     );
 
     const existing = existingIdx >= 0 ? userMap[existingIdx] : undefined;
+    const nimClean = (m.nim || '').replace(/\D/g, '');
     const userStatus: 'Aktif' | 'Nonaktif' = m.status === 'Aktif' ? 'Aktif' : 'Nonaktif';
     const identifierFormatted = `NIM. ${m.nim}`;
+    const nextUsername = nimClean || existing?.username || generateUsername(m.nama, m.nim, 'mhs');
     const prodiRaw = m.programStudi || 'S1 Kimia FMIPA UB';
     const unitFormatted =
       m.unit ||
@@ -246,11 +264,12 @@ export const syncSdmToUserAccounts = (
         ? `Mahasiswa Aktif Semester ${m.semester} (Dosen PA: ${m.dosenPANama})`
         : `Mahasiswa Aktif Semester ${m.semester}`);
     const nextAvatar = getInitials(m.nama);
-    const nextEmail = m.email || existing?.email || `${existing?.username || generateUsername(m.nama, m.nim, 'mhs')}@student.ub.ac.id`;
+    const nextEmail = m.email || existing?.email || `${nextUsername}@student.ub.ac.id`;
     const nextNoHp = m.telepon !== undefined && m.telepon !== '' ? m.telepon : (existing?.noHp || '');
 
     if (existingIdx >= 0 && existing) {
       const hasChanges =
+        existing.username !== nextUsername ||
         existing.nama !== m.nama ||
         existing.avatarText !== nextAvatar ||
         existing.status !== userStatus ||
@@ -263,6 +282,7 @@ export const syncSdmToUserAccounts = (
       if (hasChanges) {
         userMap[existingIdx] = {
           ...existing,
+          username: nextUsername,
           nama: m.nama,
           avatarText: nextAvatar,
           identifier: identifierFormatted,
@@ -275,13 +295,13 @@ export const syncSdmToUserAccounts = (
         updatedCount++;
       }
     } else {
-      const username = generateUsername(m.nama, m.nim, 'mhs');
+      const username = nimClean || generateUsername(m.nama, m.nim, 'mhs');
       const newUser: UserAccountItem = {
         id: `usr-mhs-${(m.id || '').replace(/^mhs-/, '') || Date.now()}`,
         username,
         password: 'Mhs#2024',
         nama: m.nama,
-        role: 'mahasiswa',
+        role: inferMahasiswaRoleFromText(m.programStudi || m.unit),
         identifier: identifierFormatted,
         email: m.email || `${username}@student.ub.ac.id`,
         avatarText: nextAvatar,
@@ -302,13 +322,15 @@ export const syncSdmToUserAccounts = (
     const fullName = a.gelar ? `${a.nama}, ${a.gelar}` : a.nama;
     const existingIdx = userMap.findIndex(
       (u) =>
-        (u.role === 'admin' || u.role === 'super_admin') &&
+        u.role === 'admin' &&
         (isUserMatchingEntity(u, a) || isIdentifierMatch(u.identifier, a.nip) || isNameMatch(u.nama, a.nama))
     );
 
     const existing = existingIdx >= 0 ? userMap[existingIdx] : undefined;
+    const nipClean = (a.nip || '').replace(/\D/g, '');
     const userStatus: 'Aktif' | 'Nonaktif' = a.status === 'Aktif' ? 'Aktif' : 'Nonaktif';
     const identifierFormatted = a.nip ? `NIP. ${a.nip}` : (existing?.identifier || '');
+    const nextUsername = nipClean || existing?.username || generateUsername(a.nama, a.nip, 'admin');
     const nextAvatar = getInitials(a.nama);
     const nextEmail = a.email || existing?.email || '';
     const nextUnit = a.unit || existing?.unit || '';
@@ -317,6 +339,7 @@ export const syncSdmToUserAccounts = (
 
     if (existingIdx >= 0 && existing) {
       const hasChanges =
+        existing.username !== nextUsername ||
         existing.nama !== fullName ||
         existing.avatarText !== nextAvatar ||
         existing.identifier !== identifierFormatted ||
@@ -329,6 +352,7 @@ export const syncSdmToUserAccounts = (
       if (hasChanges) {
         userMap[existingIdx] = {
           ...existing,
+          username: nextUsername,
           nama: fullName,
           avatarText: nextAvatar,
           identifier: identifierFormatted,
@@ -341,7 +365,7 @@ export const syncSdmToUserAccounts = (
         updatedCount++;
       }
     } else {
-      const username = generateUsername(a.nama, a.nip, 'admin');
+      const username = nipClean || generateUsername(a.nama, a.nip, 'admin');
       const newUser: UserAccountItem = {
         id: `usr-adm-${(a.id || '').replace(/^adm-/, '') || Date.now()}`,
         username,
@@ -368,13 +392,15 @@ export const syncSdmToUserAccounts = (
     const fullName = p.gelar ? `${p.nama}, ${p.gelar}` : p.nama;
     const existingIdx = userMap.findIndex(
       (u) =>
-        (u.role === 'admin' || u.role === 'super_admin') &&
+        u.role === 'admin' &&
         (isUserMatchingEntity(u, p) || isIdentifierMatch(u.identifier, p.nip) || isNameMatch(u.nama, p.nama))
     );
 
     const existing = existingIdx >= 0 ? userMap[existingIdx] : undefined;
+    const nipClean = (p.nip || '').replace(/\D/g, '');
     const userStatus: 'Aktif' | 'Nonaktif' = p.status === 'Aktif' ? 'Aktif' : 'Nonaktif';
     const identifierFormatted = p.nip ? `NIP. ${p.nip}` : (existing?.identifier || '');
+    const nextUsername = nipClean || existing?.username || generateUsername(p.nama, p.nip, 'plp');
     const jabatanFormatted = p.jabatan || `Pranata Laboratorium Pendidikan (${p.jenjang})`;
     const nextAvatar = getInitials(p.nama);
     const nextEmail = p.email || existing?.email || '';
@@ -383,6 +409,7 @@ export const syncSdmToUserAccounts = (
 
     if (existingIdx >= 0 && existing) {
       const hasChanges =
+        existing.username !== nextUsername ||
         existing.nama !== fullName ||
         existing.avatarText !== nextAvatar ||
         existing.identifier !== identifierFormatted ||
@@ -395,6 +422,7 @@ export const syncSdmToUserAccounts = (
       if (hasChanges) {
         userMap[existingIdx] = {
           ...existing,
+          username: nextUsername,
           nama: fullName,
           avatarText: nextAvatar,
           identifier: identifierFormatted,
@@ -407,7 +435,7 @@ export const syncSdmToUserAccounts = (
         updatedCount++;
       }
     } else {
-      const username = generateUsername(p.nama, p.nip, 'plp');
+      const username = nipClean || generateUsername(p.nama, p.nip, 'plp');
       const newUser: UserAccountItem = {
         id: `usr-plp-${(p.id || '').replace(/^plp-/, '') || Date.now()}`,
         username,
@@ -658,7 +686,8 @@ export const syncUserAccountToSdm = (
     }
   }
 
-  if (user.role === 'mahasiswa') {
+  if (isMahasiswaRole(user.role)) {
+    const jenjang = getMahasiswaJenjang(user.role);
     const existingIdx = sdmState.mahasiswaList.findIndex(
       (m) =>
         isUserMatchingEntity(user, m) ||
@@ -688,13 +717,13 @@ export const syncUserAccountToSdm = (
       const newMhs: Mahasiswa = {
         id: rawUserSuffix ? `mhs-${rawUserSuffix}` : `mhs-${Date.now()}`,
         nim: finalNim,
-        nama: userNama || 'Mahasiswa Baru',
+        nama: userNama || `Mahasiswa ${jenjang} Baru`,
         angkatan: angkatanYear,
-        programStudi: userUnit || 'S1 Kimia - FMIPA Universitas Brawijaya',
+        programStudi: userUnit || `${jenjang} Kimia - FMIPA Universitas Brawijaya`,
         email: user.email,
         telepon: user.noHp || '',
-        unit: userUnit || 'Program Studi S1 Kimia - FMIPA Universitas Brawijaya',
-        jabatan: userJabatan || 'Mahasiswa',
+        unit: userUnit || `Program Studi ${jenjang} Kimia - FMIPA Universitas Brawijaya`,
+        jabatan: userJabatan || `Mahasiswa ${jenjang}`,
         dosenPAId: '',
         dosenPANama: '',
         status: user.status === 'Aktif' ? 'Aktif' : 'Cuti',
@@ -708,7 +737,7 @@ export const syncUserAccountToSdm = (
     }
   }
 
-  if (user.role === 'admin' || user.role === 'super_admin') {
+  if (user.role === 'admin') {
     const isPlpMatch =
       userJabatan.toLowerCase().includes('plp') ||
       userJabatan.toLowerCase().includes('pranata laboratorium') ||
@@ -832,7 +861,12 @@ export const syncBidirectionalUsersAndSdm = (
 
   // 1. Loop semua User Account untuk memastikan tercatat di Modul SDM
   const safeUsers = Array.isArray(currentUsers)
-    ? currentUsers.filter((u): u is UserAccountItem => !!u && typeof u === 'object')
+    ? currentUsers
+        .filter((u): u is UserAccountItem => !!u && typeof u === 'object')
+        .map((u) => ({
+          ...u,
+          role: normalizeMahasiswaRole(u.role, u.unit || u.jabatan)
+        }))
     : [];
 
   safeUsers.forEach((u) => {
@@ -887,7 +921,8 @@ export const syncBidirectionalUsersAndSdm = (
         };
         updatedDosen.unshift(newDosen);
       }
-    } else if (userRole === 'mahasiswa') {
+    } else if (isMahasiswaRole(userRole)) {
+      const jenjang = getMahasiswaJenjang(userRole);
       const existingIdx = updatedMahasiswa.findIndex(
         (m) => isUserMatchingEntity(u, m) || (cleanId && isIdentifierMatch(m.nim, cleanId)) || isNameMatch(m.nama, userNama)
       );
@@ -901,7 +936,7 @@ export const syncBidirectionalUsersAndSdm = (
           nim: finalNim,
           nama: userNama,
           angkatan: angkatanYear,
-          programStudi: userUnit || 'S1 Kimia - FMIPA Universitas Brawijaya',
+          programStudi: userUnit || `${jenjang} Kimia - FMIPA Universitas Brawijaya`,
           email: u.email,
           telepon: u.noHp || '',
           unit: userUnit || undefined,
@@ -916,8 +951,20 @@ export const syncBidirectionalUsersAndSdm = (
           labPenelitian: 'Laboratorium Kimia Analitik & Instrumentasi'
         };
         updatedMahasiswa.unshift(newMhs);
+      } else {
+        const existingMhs = updatedMahasiswa[existingIdx];
+        if (
+          (existingMhs.email === undefined && u.email) ||
+          (existingMhs.telepon === undefined && u.noHp)
+        ) {
+          updatedMahasiswa[existingIdx] = {
+            ...existingMhs,
+            email: existingMhs.email === undefined ? (u.email || '') : existingMhs.email,
+            telepon: existingMhs.telepon === undefined ? (u.noHp || '') : existingMhs.telepon
+          };
+        }
       }
-    } else if (userRole === 'admin' || userRole === 'super_admin' || userRole === 'eksternal') {
+    } else if (userRole === 'admin' || userRole === 'eksternal') {
       if (isPembimbingLapanganCandidate) {
         const existingIdx = updatedPembimbingLapangan.findIndex(
           (p) => isUserMatchingEntity(u, p) || (cleanId && isIdentifierMatch(p.idMitra, cleanId)) || isNameMatch(p.nama, userNama)
@@ -1073,7 +1120,7 @@ export const syncUserDeleteToSdm = (
         return k;
       });
     }
-  } else if (deletedUser.role === 'mahasiswa') {
+  } else if (isMahasiswaRole(deletedUser.role)) {
     // 1. Hapus dari Mahasiswa List
     const targetMhs = updatedMhs.find(
       (m) => isIdentifierMatch(m.nim, cleanId) || isNameMatch(m.nama, deletedNama)
@@ -1147,7 +1194,7 @@ export const syncUserStatusToSdm = (
     return { newDosenList: updated };
   }
 
-  if (user.role === 'mahasiswa') {
+  if (isMahasiswaRole(user.role)) {
     const nextStatus = user.status === 'Aktif' ? 'Aktif' : 'Cuti';
     const updated = sdmState.mahasiswaList.map((m) => {
       if (isUserMatchingEntity(user, m) || isIdentifierMatch(m.nim, cleanId) || isNameMatch(m.nama, userNama)) {
@@ -1253,7 +1300,7 @@ export const syncUserEditAcrossAllModules = (
 
   // 1. PENGGUNA BERPERAN DOSEN
   if (newUser.role === 'dosen') {
-    if (oldUser.role === 'mahasiswa') {
+    if (isMahasiswaRole(oldUser.role)) {
       updatedMhs = updatedMhs.filter((m) => !isUserMatchingEntity(oldUser, m) && !isIdentifierMatch(m.nim, oldCleanId) && !isNameMatch(m.nama, oldUserNama));
     } else if (oldUser.role === 'admin' || oldUser.role === 'super_admin') {
       updatedAdmin = updatedAdmin.filter((a) => !isUserMatchingEntity(oldUser, a) && !isIdentifierMatch(a.nip, oldCleanId) && !isNameMatch(a.nama, oldUserNama));
@@ -1417,8 +1464,9 @@ export const syncUserEditAcrossAllModules = (
     });
   }
 
-  // 2. PENGGUNA BERPERAN MAHASISWA
-  else if (newUser.role === 'mahasiswa') {
+  // 2. PENGGUNA BERPERAN MAHASISWA (S1 / S2 / S3)
+  else if (isMahasiswaRole(newUser.role)) {
+    const jenjang = getMahasiswaJenjang(newUser.role);
     if (oldUser.role === 'dosen') {
       updatedDosen = updatedDosen.filter((d) => !isUserMatchingEntity(oldUser, d) && !isIdentifierMatch(d.nip || d.nidn, oldCleanId) && !isNameMatch(d.nama, oldUser.nama));
     } else if (oldUser.role === 'admin' || oldUser.role === 'super_admin') {
@@ -1464,7 +1512,7 @@ export const syncUserEditAcrossAllModules = (
         nim: updatedNim,
         nama: newUser.nama,
         angkatan: angkatanYear,
-        programStudi: newUser.unit || 'S1 Kimia - FMIPA Universitas Brawijaya',
+        programStudi: newUser.unit || `${jenjang} Kimia - FMIPA Universitas Brawijaya`,
         email: newUser.email,
         telepon: newUser.noHp || '',
         unit: newUser.unit,
@@ -1554,7 +1602,7 @@ export const syncUserEditAcrossAllModules = (
   else if (newUser.role === 'admin' || newUser.role === 'super_admin') {
     if (oldUser.role === 'dosen') {
       updatedDosen = updatedDosen.filter((d) => !isUserMatchingEntity(oldUser, d) && !isIdentifierMatch(d.nip || d.nidn, oldCleanId) && !isNameMatch(d.nama, oldUser.nama));
-    } else if (oldUser.role === 'mahasiswa') {
+    } else if (isMahasiswaRole(oldUser.role)) {
       updatedMhs = updatedMhs.filter((m) => !isUserMatchingEntity(oldUser, m) && !isIdentifierMatch(m.nim, oldCleanId) && !isNameMatch(m.nama, oldUser.nama));
     } else if (oldUser.role === 'eksternal') {
       updatedPembimbingLapangan = updatedPembimbingLapangan.filter(
@@ -1655,7 +1703,7 @@ export const syncUserEditAcrossAllModules = (
   } else if (newUser.role === 'eksternal') {
     if (oldUser.role === 'dosen') {
       updatedDosen = updatedDosen.filter((d) => !isUserMatchingEntity(oldUser, d) && !isIdentifierMatch(d.nip || d.nidn, oldCleanId) && !isNameMatch(d.nama, oldUser.nama));
-    } else if (oldUser.role === 'mahasiswa') {
+    } else if (isMahasiswaRole(oldUser.role)) {
       updatedMhs = updatedMhs.filter((m) => !isUserMatchingEntity(oldUser, m) && !isIdentifierMatch(m.nim, oldCleanId) && !isNameMatch(m.nama, oldUser.nama));
     } else if (oldUser.role === 'admin' || oldUser.role === 'super_admin') {
       updatedAdmin = updatedAdmin.filter((a) => !isUserMatchingEntity(oldUser, a) && !isIdentifierMatch(a.nip, oldCleanId) && !isNameMatch(a.nama, oldUser.nama));
@@ -1742,7 +1790,7 @@ export const syncUserDeleteAcrossAllModules = (
   let updatedSurat = state.suratList ? [...state.suratList] : [];
 
   // Cari entitas yang cocok sesuai peran akun yang dihapus (mencegah bentrok nama antar peran berbeda)
-  const matchedMhsList = deletedUser.role === 'mahasiswa' ? updatedMhs.filter((m) => isUserMatchingEntity(deletedUser, m)) : [];
+  const matchedMhsList = isMahasiswaRole(deletedUser.role) ? updatedMhs.filter((m) => isUserMatchingEntity(deletedUser, m)) : [];
   const matchedDosenList = deletedUser.role === 'dosen' ? updatedDosen.filter((d) => isUserMatchingEntity(deletedUser, d)) : [];
   const matchedAdminList =
     deletedUser.role === 'admin' || deletedUser.role === 'super_admin'
@@ -1756,7 +1804,7 @@ export const syncUserDeleteAcrossAllModules = (
   // 1. PEMBERSIHAN DATA MAHASISWA & RANGKAIAN MODUL TERKAIT
   const mhsIdsToRemove = new Set(matchedMhsList.map((m) => m.id));
 
-  if (deletedUser.role === 'mahasiswa') {
+  if (isMahasiswaRole(deletedUser.role)) {
     updatedMhs.forEach((m) => {
       if (
         isUserMatchingEntity(deletedUser, m) ||
@@ -1769,7 +1817,7 @@ export const syncUserDeleteAcrossAllModules = (
     });
   }
 
-  if (mhsIdsToRemove.size > 0 || deletedUser.role === 'mahasiswa') {
+  if (mhsIdsToRemove.size > 0 || isMahasiswaRole(deletedUser.role)) {
     // Hapus seluruh record mahasiswa yang cocok
     updatedMhs = updatedMhs.filter((m) => !mhsIdsToRemove.has(m.id));
 

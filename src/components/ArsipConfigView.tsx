@@ -4,7 +4,8 @@ import {
   VisibilitasArsip,
   UserRole,
   MasterKategoriArsipItem,
-  StatusKategori
+  StatusKategori,
+  isMahasiswaRole
 } from '../types/sikma';
 import {
   INITIAL_KATEGORI_ARSIP_LIST,
@@ -54,7 +55,7 @@ const VISIBILITAS_OPTIONS: VisibilitasArsip[] = [
 const ITEMS_PER_PAGE = 10;
 
 export const ArsipConfigView: React.FC<ArsipConfigViewProps> = ({ currentRole }) => {
-  if (currentRole === 'mahasiswa') {
+  if (isMahasiswaRole(currentRole)) {
     return (
       <div className="bg-white rounded-2xl border border-slate-200 p-8 sm:p-12 text-center max-w-xl mx-auto shadow-sm my-8">
         <div className="w-16 h-16 bg-rose-100 text-rose-600 rounded-full flex items-center justify-center mx-auto mb-4">

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ActiveTab, UserRole } from '../types/sikma';
+import { ActiveTab, UserRole, getUserRoleLabel } from '../types/sikma';
 import {
   LayoutDashboard,
   Users,
@@ -111,9 +111,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
           id: 'user',
           label: 'User',
           icon: UserCheck,
-          badge: '4 Role',
+          badge: '7 Role',
           badgeColor: 'bg-purple-100 text-purple-800',
-          allowedRoles: ['super_admin', 'admin', 'dosen']
+          allowedRoles: ['super_admin', 'admin']
         },
         {
           id: 'semester',
@@ -330,16 +330,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     ? 'bg-amber-100 text-amber-800'
                     : currentRole === 'dosen'
                     ? 'bg-blue-100 text-blue-800'
+                    : currentRole === 'eksternal'
+                    ? 'bg-cyan-100 text-cyan-800'
                     : 'bg-emerald-100 text-emerald-800'
                 }`}
               >
-                {currentRole === 'super_admin'
-                  ? 'Super Admin'
-                  : currentRole === 'admin'
+                {currentRole === 'admin'
                   ? 'Admin Dept'
                   : currentRole === 'dosen'
                   ? 'Dosen PA'
-                  : 'Mahasiswa'}
+                  : getUserRoleLabel(currentRole)}
               </span>
               <span className="text-[10px] text-slate-400">FSTeM UB</span>
             </div>
@@ -352,7 +352,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {sections.map((secName) => {
           const items = menuItems
             .filter((i) => i.section === secName)
-            .filter((i) => !i.allowedRoles || i.allowedRoles.includes(currentRole))
+            .filter((i) => {
+              if (currentRole === 'eksternal') {
+                return i.id === 'profile' || i.id === 'klk';
+              }
+              return !i.allowedRoles || i.allowedRoles.includes(currentRole);
+            })
             .filter((i) => {
               if (i.children && i.children.length > 0) {
                 return i.children.some((c) => !c.allowedRoles || c.allowedRoles.includes(currentRole));

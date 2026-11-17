@@ -149,7 +149,78 @@ export interface Pengumuman {
   penting: boolean;
 }
 
-export type UserRole = 'super_admin' | 'admin' | 'dosen' | 'mahasiswa' | 'eksternal';
+export type MahasiswaRole = 'mahasiswa_s1' | 'mahasiswa_s2' | 'mahasiswa_s3';
+
+export type UserRole = 'super_admin' | 'admin' | 'dosen' | MahasiswaRole | 'eksternal';
+
+export const isMahasiswaRole = (role?: string | null): boolean =>
+  role === 'mahasiswa_s1' ||
+  role === 'mahasiswa_s2' ||
+  role === 'mahasiswa_s3' ||
+  role === 'mahasiswa';
+
+export const getMahasiswaJenjang = (role?: string | null): 'S1' | 'S2' | 'S3' => {
+  if (role === 'mahasiswa_s3') return 'S3';
+  if (role === 'mahasiswa_s2') return 'S2';
+  return 'S1';
+};
+
+export const getMahasiswaRoleLabel = (role?: string | null): string => {
+  if (role === 'mahasiswa_s3') return 'Mahasiswa S3';
+  if (role === 'mahasiswa_s2') return 'Mahasiswa S2';
+  return 'Mahasiswa S1';
+};
+
+export const getUserRoleLabel = (role?: string | null): string => {
+  switch (role) {
+    case 'super_admin':
+      return 'Super Admin';
+    case 'admin':
+      return 'Admin Jurusan';
+    case 'dosen':
+      return 'Dosen';
+    case 'mahasiswa_s1':
+      return 'Mahasiswa S1';
+    case 'mahasiswa_s2':
+      return 'Mahasiswa S2';
+    case 'mahasiswa_s3':
+      return 'Mahasiswa S3';
+    case 'mahasiswa':
+      return 'Mahasiswa S1';
+    case 'eksternal':
+      return 'User Eksternal';
+    default:
+      return role || 'Pengguna';
+  }
+};
+
+export const inferMahasiswaRoleFromText = (unitOrProdi?: string | null): MahasiswaRole => {
+  const txt = (unitOrProdi || '').toLowerCase();
+  if (txt.includes('s3') || txt.includes('doktor')) return 'mahasiswa_s3';
+  if (txt.includes('s2') || txt.includes('magister')) return 'mahasiswa_s2';
+  return 'mahasiswa_s1';
+};
+
+export const normalizeMahasiswaRole = (
+  role?: string | null,
+  unitOrProdi?: string | null
+): UserRole => {
+  if (
+    role === 'super_admin' ||
+    role === 'admin' ||
+    role === 'dosen' ||
+    role === 'mahasiswa_s1' ||
+    role === 'mahasiswa_s2' ||
+    role === 'mahasiswa_s3' ||
+    role === 'eksternal'
+  ) {
+    return role;
+  }
+  if (role === 'mahasiswa') {
+    return inferMahasiswaRoleFromText(unitOrProdi);
+  }
+  return 'mahasiswa_s1';
+};
 
 export interface AuthUser {
   id: string;
@@ -162,6 +233,9 @@ export interface AuthUser {
   unit: string;
   jabatan: string;
   lastLogin?: string;
+  mustChangePassword?: boolean;
+  isFirstLogin?: boolean;
+  passwordChangedAt?: string;
 }
 
 export type ActiveTab = 
@@ -425,7 +499,11 @@ export interface PengajuanKLK {
   statusVerifikasiSuratMitraDosen?: 'Menunggu Verifikasi' | 'Disetujui' | 'Perlu Perbaikan';
   catatanVerifikasiSuratMitraDosen?: string;
   tanggalVerifikasiSuratMitraDosen?: string;
+  suratPengantarTerkirimKeMahasiswa?: boolean;
+  waktuKirimSuratPengantarKeMahasiswa?: string;
+  suratPengantarPengirim?: string;
   riwayatAktivitas?: ItemRiwayatKLK[];
+  riwayatVersiForm?: RiwayatVersiFormKLK[];
   verifikasiBerkasChecklist?: Record<
     string,
     {
@@ -437,6 +515,31 @@ export interface PengajuanKLK {
       kriteria?: Record<string, boolean>;
     }
   >;
+}
+
+export interface RiwayatVersiFormKLK {
+  id: string;
+  kodePendaftaran: string;
+  waktuSubmit: string;
+  timestamp?: number;
+  skema: SkemaKLK;
+  namaMitra: string;
+  alamatMitra?: string;
+  bidangPekerjaan?: string;
+  mentorIndustri?: string;
+  tanggalMulai: string;
+  tanggalSelesai: string;
+  semester: number;
+  namaSemester?: string;
+  sksDiakui: number;
+  status: StatusKLK | string;
+  statusVerifikasiDosen?: string;
+  statusResponMitra?: 'Belum Dikonfirmasi' | 'Diterima' | 'Ditolak';
+  dpaNama?: string;
+  catatanVerifikasi?: string;
+  catatanVerifikasiDosen?: string;
+  nomorSuratTugas?: string;
+  alasanPerubahan?: string;
 }
 
 export interface ItemRiwayatKLK {

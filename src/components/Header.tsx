@@ -1,5 +1,5 @@
 import React from 'react';
-import { UserRole, AuthUser } from '../types/sikma';
+import { UserRole, AuthUser, isMahasiswaRole, getUserRoleLabel, getMahasiswaJenjang } from '../types/sikma';
 import { UbLogo } from './UbLogo';
 import { 
   GraduationCap, 
@@ -95,17 +95,9 @@ export const Header: React.FC<HeaderProps> = ({
               {currentRole === 'admin' && <ShieldCheck className="w-3.5 h-3.5" />}
               {currentRole === 'dosen' && <GraduationCap className="w-3.5 h-3.5" />}
               {currentRole === 'eksternal' && <Building2 className="w-3.5 h-3.5" />}
-              {currentRole === 'mahasiswa' && <UserCheck className="w-3.5 h-3.5" />}
+              {isMahasiswaRole(currentRole) && <UserCheck className="w-3.5 h-3.5" />}
               <span>
-                {currentRole === 'super_admin'
-                  ? 'Super Admin'
-                  : currentRole === 'admin'
-                  ? 'Admin'
-                  : currentRole === 'dosen'
-                  ? 'Dosen'
-                  : currentRole === 'eksternal'
-                  ? 'User Eksternal'
-                  : 'Mahasiswa'}
+                {currentRole === 'admin' ? 'Admin' : getUserRoleLabel(currentRole)}
               </span>
             </span>
           </div>
@@ -144,18 +136,24 @@ export const Header: React.FC<HeaderProps> = ({
                   : 'bg-emerald-900/60 border-emerald-400 text-emerald-200'
               }`}>
                 {currentUser?.avatarText || (
-                  currentRole === 'super_admin' ? 'SA' :
+                  currentRole === 'super_admin' ? 'ZA' :
                   currentRole === 'admin' ? 'AK' :
-                  currentRole === 'dosen' ? 'AS' : 'AR'
+                  currentRole === 'dosen' ? 'AS' :
+                  currentRole === 'eksternal' ? 'TA' :
+                  currentRole === 'mahasiswa_s2' ? 'CD' :
+                  currentRole === 'mahasiswa_s3' ? 'IM' : 'AR'
                 )}
               </div>
               <div className="hidden lg:block text-left">
                 <div className="text-xs font-semibold text-white leading-tight flex items-center gap-1.5 group-hover:text-yellow-300 transition-colors">
                   <span>
                     {currentUser?.nama || (
-                      currentRole === 'super_admin' ? 'Prof. Dr. Hermin Sulistyarti' :
+                      currentRole === 'super_admin' ? 'Zuper Admin' :
                       currentRole === 'admin' ? 'Biro Administrasi Kimia' :
                       currentRole === 'dosen' ? 'Dr. Sc. Akhmad Sabarudin' :
+                      currentRole === 'eksternal' ? 'Dra. Tri Astuti, M.Si' :
+                      currentRole === 'mahasiswa_s2' ? 'Citra Dewi Wulandari, S.Si.' :
+                      currentRole === 'mahasiswa_s3' ? 'Irfan Maulana, M.Si.' :
                       'Ahmad Rizky Pratama'
                     )}
                   </span>
@@ -166,18 +164,25 @@ export const Header: React.FC<HeaderProps> = ({
                       ? 'bg-amber-500/20 text-amber-300 border border-amber-400/30'
                       : currentRole === 'dosen'
                       ? 'bg-blue-500/20 text-blue-300 border border-blue-400/30'
+                      : currentRole === 'eksternal'
+                      ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-400/30'
                       : 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30'
                   }`}>
                     {currentRole === 'super_admin' ? 'Super Admin' :
                      currentRole === 'admin' ? 'Admin' :
-                     currentRole === 'dosen' ? 'Dosen' : 'Mhs'}
+                     currentRole === 'dosen' ? 'Dosen' :
+                     currentRole === 'eksternal' ? 'Eksternal' :
+                     `Mhs ${getMahasiswaJenjang(currentRole)}`}
                   </span>
                 </div>
                 <div className="text-[11px] text-[#D4AF37] flex items-center">
                   {currentUser?.identifier || (
-                    currentRole === 'super_admin' ? 'NIP 196403211989032001' :
+                    currentRole === 'super_admin' ? 'SA-001' :
                     currentRole === 'admin' ? 'NIP 198504122010121004' :
                     currentRole === 'dosen' ? 'NIP 197405102000031002' :
+                    currentRole === 'eksternal' ? 'IDP-8829101' :
+                    currentRole === 'mahasiswa_s2' ? 'NIM 256090200111001' :
+                    currentRole === 'mahasiswa_s3' ? 'NIM 257090200111002' :
                     'NIM 215090200111012'
                   )}
                 </div>

@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import * as XLSX from 'xlsx';
-import { Mahasiswa, Dosen, UserRole, LabRiset, PengajuanKLK } from '../types/sikma';
+import { Mahasiswa, Dosen, UserRole, LabRiset, PengajuanKLK, SemesterItem, getUserRoleLabel } from '../types/sikma';
+import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import {
   GraduationCap,
   Search,
@@ -87,6 +88,10 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
 
   // Modals
   const [detailMhs, setDetailMhs] = useState<Mahasiswa | null>(null);
+  const activeDetailMhs = useMemo(
+    () => (detailMhs ? mahasiswaList.find((m) => m.id === detailMhs.id) ?? detailMhs : null),
+    [detailMhs, mahasiswaList]
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingMhs, setEditingMhs] = useState<Mahasiswa | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -109,30 +114,145 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
     nama: string;
     angkatan: string;
     programStudi: string;
+    email: string;
+    telepon: string;
     dosenPANama: string;
     status: Mahasiswa['status'];
-    semester: number;
-    ipk: number;
-    totalSks: number;
+    semester: string;
+    ipk: string;
+    totalSks: string;
     tahapSkripsi: Mahasiswa['tahapSkripsi'];
     judulSkripsi: string;
-    labPenelitian: LabRiset;
+    labPenelitian: LabRiset | '';
+    dosenPembimbing1Nama: string;
+    dosenPembimbing2Nama: string;
   } = {
     nim: '',
     nama: '',
-    angkatan: '2023',
+    angkatan: '2024',
     programStudi: 'S1 Kimia - FMIPA Universitas Brawijaya',
+    email: '',
+    telepon: '',
     dosenPANama: '',
     status: 'Aktif',
-    semester: 3,
-    ipk: 3.65,
-    totalSks: 72,
+    semester: '5',
+    ipk: '3.65',
+    totalSks: '72',
     tahapSkripsi: 'Belum Mengambil',
     judulSkripsi: '',
-    labPenelitian: 'Laboratorium Kimia Analitik & Instrumentasi'
+    labPenelitian: 'Laboratorium Kimia Analitik & Instrumentasi',
+    dosenPembimbing1Nama: '',
+    dosenPembimbing2Nama: ''
   };
 
   const [formData, setFormData] = useState(initialFormState);
+
+  const dosenSelectOptions = useMemo(
+    () =>
+      dosenList.map((d) => ({
+        id: d.id,
+        nip: d.nip || d.nidn || '',
+        label: `${d.nama}${d.gelar ? `, ${d.gelar}` : ''}`,
+        bidang: d.bidang,
+        nama: d.nama
+      })),
+    [dosenList]
+  );
+
+  const resolveDosenLabel = (rawNama?: string, rawId?: string): string => {
+    const clean = (rawNama || '').trim();
+    if (clean) {
+      const exact = dosenSelectOptions.find((opt) => opt.label === clean || opt.nama === clean);
+      if (exact) return exact.label;
+      return clean;
+    }
+    if (rawId) {
+      const byId = dosenSelectOptions.find((opt) => opt.id === rawId);
+      if (byId) return byId.label;
+    }
+    return '';
+  };
+
+  const activeSemesterFromDb = useMemo(() => {
+    try {
+      const saved = localStorage.getItem('sikma_semesters');
+      if (saved) {
+        const parsed: SemesterItem[] = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          return (
+            parsed.find((s) => s.status === 'Aktif') ||
+            INITIAL_SEMESTER_LIST.find((s) => s.status === 'Aktif') ||
+            parsed[0]
+          );
+        }
+      }
+    } catch {}
+    return INITIAL_SEMESTER_LIST.find((s) => s.status === 'Aktif') || INITIAL_SEMESTER_LIST[0];
+  }, [isAddModalOpen, editingMhs]);
+
+  const activeStartYear = useMemo(() => {
+    const match = String(activeSemesterFromDb?.tahunAjaran || '').match(/(\d{4})/);
+    return match ? parseInt(match[1], 10) : 2026;
+  }, [activeSemesterFromDb]);
+
+  const activeIsGenap = activeSemesterFromDb?.tipe === 'Genap';
+
+  const getCorrelatedSemester = (angkatanStr: string): number => {
+    const yr = parseInt(angkatanStr, 10);
+    if (!Number.isFinite(yr)) return 1;
+    const raw = (activeStartYear - yr) * 2 + (activeIsGenap ? 2 : 1);
+    return Math.max(1, Math.min(16, raw));
+  };
+
+  const getCorrelatedAngkatan = (semesterStr: string): string => {
+    const sem = parseInt(semesterStr, 10);
+    if (!Number.isFinite(sem) || sem < 1) return String(activeStartYear);
+    return String(activeStartYear - Math.floor((sem - 1) / 2));
+  };
+
+  const handleAngkatanChange = (newAngkatan: string) => {
+    const correlatedSemester = getCorrelatedSemester(newAngkatan);
+    setFormData((prev) => ({
+      ...prev,
+      angkatan: newAngkatan,
+      semester: String(correlatedSemester)
+    }));
+  };
+
+  const handleSemesterChange = (newSemester: string) => {
+    const correlatedAngkatan = getCorrelatedAngkatan(newSemester);
+    setFormData((prev) => ({
+      ...prev,
+      semester: newSemester,
+      angkatan: correlatedAngkatan
+    }));
+  };
+
+  const angkatanSelectOptions = useMemo(() => {
+    const years = new Set<string>();
+    for (let y = activeStartYear - 7; y <= activeStartYear; y++) {
+      years.add(String(y));
+    }
+    mahasiswaList.forEach((m) => {
+      if (m.angkatan && m.angkatan.trim()) years.add(m.angkatan.trim());
+    });
+    if (formData.angkatan && formData.angkatan.trim()) {
+      years.add(formData.angkatan.trim());
+    }
+    return Array.from(years).sort();
+  }, [activeStartYear, mahasiswaList, formData.angkatan]);
+
+  const semesterSelectOptions = useMemo(() => {
+    const sems = new Set<number>();
+    for (let s = 1; s <= 16; s++) {
+      sems.add(s);
+    }
+    const cur = parseInt(formData.semester, 10);
+    if (Number.isFinite(cur) && cur >= 1) {
+      sems.add(cur);
+    }
+    return Array.from(sems).sort((a, b) => a - b);
+  }, [formData.semester]);
 
   // Distinct Angkatan from list
   const angkatanOptions = useMemo(() => {
@@ -219,19 +339,22 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
   const handleOpenEdit = (m: Mahasiswa) => {
     setEditingMhs(m);
     setFormData({
-      nim: m.nim,
-      nama: m.nama,
-      angkatan: m.angkatan,
-      programStudi: m.programStudi,
-      dosenPANama: m.dosenPANama || '',
+      nim: m.nim || '',
+      nama: m.nama || '',
+      angkatan: m.angkatan || '2023',
+      programStudi: m.programStudi || 'S1 Kimia - FMIPA Universitas Brawijaya',
+      email: m.email || '',
+      telepon: m.telepon || '',
+      dosenPANama: resolveDosenLabel(m.dosenPANama, m.dosenPAId),
       status: m.status,
-      semester: m.semester,
-      ipk: m.ipk,
-      totalSks: m.totalSks,
-      tahapSkripsi: m.tahapSkripsi,
+      semester: String(m.semester ?? 1),
+      ipk: Number.isFinite(Number(m.ipk)) ? Number(m.ipk).toFixed(2) : '0.00',
+      totalSks: String(m.totalSks ?? 0),
+      tahapSkripsi: m.tahapSkripsi || 'Belum Mengambil',
       judulSkripsi: m.judulSkripsi || '',
-      labPenelitian:
-        m.labPenelitian || 'Laboratorium Kimia Analitik & Instrumentasi'
+      labPenelitian: m.labPenelitian || '',
+      dosenPembimbing1Nama: resolveDosenLabel(m.dosenPembimbing1Nama, m.dosenPembimbing1Id),
+      dosenPembimbing2Nama: resolveDosenLabel(m.dosenPembimbing2Nama, m.dosenPembimbing2Id)
     });
   };
 
@@ -243,18 +366,75 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
       return;
     }
 
+    const cleanDosenPANama = formData.dosenPANama.trim();
+    const selectedDosen = cleanDosenPANama
+      ? dosenList.find(
+          (d) =>
+            `${d.nama}${d.gelar ? `, ${d.gelar}` : ''}` === cleanDosenPANama ||
+            `${d.nama}, ${d.gelar}` === cleanDosenPANama ||
+            d.nama === cleanDosenPANama
+        )
+      : undefined;
+
+    const cleanPembimbing1 = formData.dosenPembimbing1Nama.trim();
+    const selectedPembimbing1 = cleanPembimbing1
+      ? dosenList.find(
+          (d) =>
+            `${d.nama}${d.gelar ? `, ${d.gelar}` : ''}` === cleanPembimbing1 ||
+            `${d.nama}, ${d.gelar}` === cleanPembimbing1 ||
+            d.nama === cleanPembimbing1
+        )
+      : undefined;
+
+    const cleanPembimbing2 = formData.dosenPembimbing2Nama.trim();
+    const selectedPembimbing2 = cleanPembimbing2
+      ? dosenList.find(
+          (d) =>
+            `${d.nama}${d.gelar ? `, ${d.gelar}` : ''}` === cleanPembimbing2 ||
+            `${d.nama}, ${d.gelar}` === cleanPembimbing2 ||
+            d.nama === cleanPembimbing2
+        )
+      : undefined;
+
+    const parsedSemester = Math.max(1, parseInt(formData.semester, 10) || 1);
+    const parsedIpkRaw = parseFloat(formData.ipk.replace(',', '.'));
+    const parsedIpk = Number.isFinite(parsedIpkRaw) ? Math.min(4, Math.max(0, parsedIpkRaw)) : 0;
+    const parsedTotalSks = Math.max(0, parseInt(formData.totalSks, 10) || 0);
+    const cleanProdi = formData.programStudi.trim();
+    const cleanAngkatan = formData.angkatan.trim() || '2023';
+    const nextUnit = cleanProdi
+      ? cleanProdi.toLowerCase().startsWith('program studi')
+        ? cleanProdi
+        : `Program Studi ${cleanProdi} (Angkatan ${cleanAngkatan})`
+      : undefined;
+    const nextJabatan = cleanDosenPANama
+      ? `Mahasiswa ${formData.status} Semester ${parsedSemester} (Dosen PA: ${cleanDosenPANama})`
+      : `Mahasiswa ${formData.status} Semester ${parsedSemester}`;
+
     if (editingMhs) {
-      const selectedDosen = dosenList.find(
-        (d) => `${d.nama}, ${d.gelar}` === formData.dosenPANama
-      );
       const updated: Mahasiswa = {
         ...editingMhs,
-        ...formData,
         nim: formData.nim.trim(),
         nama: formData.nama.trim(),
-        unit: editingMhs.programStudi !== formData.programStudi.trim() ? formData.programStudi.trim() : editingMhs.unit,
-        dosenPAId: selectedDosen?.id || (formData.dosenPANama ? editingMhs.dosenPAId || 'dos-1' : ''),
-        dosenPANama: formData.dosenPANama ? formData.dosenPANama.trim() : '',
+        angkatan: cleanAngkatan,
+        programStudi: cleanProdi,
+        email: formData.email.trim(),
+        telepon: formData.telepon.trim(),
+        unit: nextUnit ?? editingMhs.unit,
+        jabatan: nextJabatan,
+        status: formData.status,
+        semester: parsedSemester,
+        ipk: parsedIpk,
+        totalSks: parsedTotalSks,
+        tahapSkripsi: formData.tahapSkripsi,
+        labPenelitian: formData.labPenelitian ? (formData.labPenelitian as LabRiset) : undefined,
+        dosenPAId: selectedDosen?.id || '',
+        dosenPANip: selectedDosen ? (selectedDosen.nip || selectedDosen.nidn || '') : '',
+        dosenPANama: cleanDosenPANama,
+        dosenPembimbing1Id: selectedPembimbing1?.id || undefined,
+        dosenPembimbing1Nama: cleanPembimbing1 || undefined,
+        dosenPembimbing2Id: selectedPembimbing2?.id || undefined,
+        dosenPembimbing2Nama: cleanPembimbing2 || undefined,
         judulSkripsi: formData.judulSkripsi.trim() || undefined
       };
       onUpdateMahasiswa(updated);
@@ -264,16 +444,29 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
         setDetailMhs(updated);
       }
     } else {
-      const selectedDosen = dosenList.find(
-        (d) => `${d.nama}, ${d.gelar}` === formData.dosenPANama
-      );
       const newMhs: Mahasiswa = {
         id: `mhs-${Date.now()}`,
-        ...formData,
         nim: formData.nim.trim(),
         nama: formData.nama.trim(),
-        dosenPAId: selectedDosen?.id || (formData.dosenPANama ? 'dos-1' : ''),
-        dosenPANama: formData.dosenPANama ? formData.dosenPANama.trim() : '',
+        angkatan: cleanAngkatan,
+        programStudi: cleanProdi,
+        email: formData.email.trim(),
+        telepon: formData.telepon.trim(),
+        unit: nextUnit,
+        jabatan: nextJabatan,
+        status: formData.status,
+        semester: parsedSemester,
+        ipk: parsedIpk,
+        totalSks: parsedTotalSks,
+        tahapSkripsi: formData.tahapSkripsi,
+        labPenelitian: formData.labPenelitian ? (formData.labPenelitian as LabRiset) : undefined,
+        dosenPAId: selectedDosen?.id || '',
+        dosenPANip: selectedDosen ? (selectedDosen.nip || selectedDosen.nidn || '') : '',
+        dosenPANama: cleanDosenPANama,
+        dosenPembimbing1Id: selectedPembimbing1?.id || undefined,
+        dosenPembimbing1Nama: cleanPembimbing1 || undefined,
+        dosenPembimbing2Id: selectedPembimbing2?.id || undefined,
+        dosenPembimbing2Nama: cleanPembimbing2 || undefined,
         judulSkripsi: formData.judulSkripsi.trim() || undefined
       };
       onAddMahasiswa(newMhs);
@@ -727,7 +920,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
             <strong className="text-slate-800">{mahasiswaList.length}</strong> mahasiswa terdaftar dalam sistem.
           </div>
           <div className="text-slate-400">
-            Akses Hak Istimewa: <span className="font-bold text-[#002B49]">{currentRole.toUpperCase()}</span>
+            Akses Hak Istimewa: <span className="font-bold text-[#002B49]">{getUserRoleLabel(currentRole)}</span>
           </div>
         </div>
       </div>
@@ -1136,18 +1329,18 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
       {/* ========================================================================= */}
       {/* MODAL DETAIL MAHASISWA                                                    */}
       {/* ========================================================================= */}
-      {detailMhs && (
+      {activeDetailMhs && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fadeIn">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-2xl max-h-[90vh] flex flex-col overflow-hidden">
             {/* Header */}
             <div className="bg-[#002B49] text-white px-6 py-4 flex items-center justify-between border-b border-white/10 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 rounded-xl bg-[#D4AF37] text-[#002B49] flex items-center justify-center font-black text-sm shrink-0">
-                  {detailMhs.nama.slice(0, 2).toUpperCase()}
+                  {activeDetailMhs.nama.slice(0, 2).toUpperCase()}
                 </div>
                 <div>
-                  <h3 className="text-base font-bold">{detailMhs.nama}</h3>
-                  <p className="text-xs text-slate-300 font-mono">NIM: {detailMhs.nim} &bull; Angkatan {detailMhs.angkatan}</p>
+                  <h3 className="text-base font-bold">{activeDetailMhs.nama}</h3>
+                  <p className="text-xs text-slate-300 font-mono">NIM: {activeDetailMhs.nim} &bull; Angkatan {activeDetailMhs.angkatan}</p>
                 </div>
               </div>
               <button
@@ -1167,49 +1360,71 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                   <span className="font-semibold text-slate-600">Status Akademik:</span>
                   <span
                     className={`px-2.5 py-0.5 rounded-full font-bold text-[11px] ${
-                      detailMhs.status === 'Aktif'
+                      activeDetailMhs.status === 'Aktif'
                         ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                        : detailMhs.status === 'Cuti'
+                        : activeDetailMhs.status === 'Cuti'
                         ? 'bg-amber-100 text-amber-800 border border-amber-300'
                         : 'bg-blue-100 text-blue-800 border border-blue-300'
                     }`}
                   >
-                    {detailMhs.status}
+                    {activeDetailMhs.status}
                   </span>
                 </div>
                 <div className="text-slate-600">
-                  Semester: <strong className="text-slate-900 font-bold">{detailMhs.semester}</strong>
+                  Semester Aktif: <strong className="text-slate-900 font-bold">Semester {activeDetailMhs.semester}</strong>
                 </div>
               </div>
 
-              {/* Data Akademik Pokok */}
+              {/* Data Pokok, Akademik & Kontak Mahasiswa */}
               <div>
                 <h4 className="font-bold text-[#002B49] text-xs uppercase tracking-wider mb-2 border-b border-slate-200 pb-1 flex items-center gap-1.5">
                   <GraduationCap className="w-4 h-4 text-[#D4AF37]" />
-                  <span>I. Data Akademik Mahasiswa</span>
+                  <span>I. Data Akademik & Kontak Mahasiswa</span>
                 </h4>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
                   <div>
-                    <span className="text-slate-500 block">Program Studi</span>
-                    <strong className="text-slate-900 font-semibold">{detailMhs.programStudi}</strong>
+                    <span className="text-slate-500 block">Nomor Induk Mahasiswa (NIM)</span>
+                    <strong className="text-slate-900 font-mono font-bold">{activeDetailMhs.nim || '-'}</strong>
                   </div>
-                  {detailMhs.dosenPANama && detailMhs.dosenPANama.trim() !== '' && (
-                    <div>
-                      <span className="text-slate-500 block">Dosen Pembimbing Akademik (PA)</span>
-                      <strong className="text-slate-900 font-semibold">{detailMhs.dosenPANama}</strong>
-                    </div>
-                  )}
+                  <div>
+                    <span className="text-slate-500 block">Nama Lengkap Mahasiswa</span>
+                    <strong className="text-slate-900 font-bold">{activeDetailMhs.nama || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Tahun Angkatan</span>
+                    <strong className="text-slate-900 font-semibold">{activeDetailMhs.angkatan || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Semester Aktif</span>
+                    <strong className="text-slate-900 font-semibold">Semester {activeDetailMhs.semester ?? '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Program Studi</span>
+                    <strong className="text-slate-900 font-semibold">{activeDetailMhs.programStudi || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Dosen Pembimbing Akademik (PA)</span>
+                    <strong className="text-slate-900 font-semibold">{activeDetailMhs.dosenPANama || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Email Mahasiswa</span>
+                    <strong className="text-slate-900 font-mono font-semibold">{activeDetailMhs.email || '-'}</strong>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">No. HP / WhatsApp</span>
+                    <strong className="text-slate-900 font-mono font-semibold">{activeDetailMhs.telepon || '-'}</strong>
+                  </div>
                   <div>
                     <span className="text-slate-500 block">Indeks Prestasi Kumulatif (IPK)</span>
                     <strong className="text-slate-900 font-mono text-sm font-black text-[#002B49]">
-                      {detailMhs.ipk.toFixed(2)}
+                      {Number(activeDetailMhs.ipk || 0).toFixed(2)}
                     </strong>
                     <span className="text-slate-500 text-[11px]"> / 4.00</span>
                   </div>
                   <div>
                     <span className="text-slate-500 block">Total SKS Tempuh</span>
                     <strong className="text-slate-900 font-mono text-sm font-black">
-                      {detailMhs.totalSks} SKS
+                      {activeDetailMhs.totalSks ?? 0} SKS
                     </strong>
                   </div>
                 </div>
@@ -1222,35 +1437,57 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                   <span>II. Progres Tugas Akhir / Skripsi</span>
                 </h4>
                 <div className="space-y-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                  <div>
-                    <span className="text-slate-500 block">Tahap Skripsi Saat Ini</span>
-                    <span className="inline-block mt-1 px-3 py-1 bg-amber-100 text-amber-900 font-bold rounded-lg border border-amber-300 text-xs">
-                      {detailMhs.tahapSkripsi}
-                    </span>
-                  </div>
-                  {detailMhs.judulSkripsi && (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div>
-                      <span className="text-slate-500 block">Judul Usulan Skripsi</span>
-                      <p className="text-slate-900 font-medium mt-0.5 italic">
-                        "{detailMhs.judulSkripsi}"
-                      </p>
+                      <span className="text-slate-500 block">Tahap Skripsi Saat Ini</span>
+                      <span
+                        className={`inline-block mt-1 px-3 py-1 font-bold rounded-lg text-xs ${
+                          activeDetailMhs.tahapSkripsi === 'Belum Mengambil'
+                            ? 'bg-slate-200/80 text-slate-700 border border-slate-300'
+                            : activeDetailMhs.tahapSkripsi === 'Selesai / Lulus'
+                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
+                            : 'bg-amber-100 text-amber-900 border border-amber-300'
+                        }`}
+                      >
+                        {activeDetailMhs.tahapSkripsi || '-'}
+                      </span>
                     </div>
-                  )}
-                  {detailMhs.labPenelitian && (
                     <div>
                       <span className="text-slate-500 block">Laboratorium Riset</span>
-                      <strong className="text-slate-900 font-semibold flex items-center gap-1.5 mt-0.5">
-                        <FlaskConical className="w-3.5 h-3.5 text-blue-600" />
-                        <span>{detailMhs.labPenelitian}</span>
+                      <strong className="text-slate-900 font-semibold flex items-center gap-1.5 mt-1">
+                        <FlaskConical className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                        <span>{activeDetailMhs.labPenelitian || '-'}</span>
                       </strong>
                     </div>
-                  )}
+                    <div>
+                      <span className="text-slate-500 block">Dosen Pembimbing Skripsi 1</span>
+                      <strong className="text-slate-900 font-semibold mt-0.5 block">
+                        {activeDetailMhs.dosenPembimbing1Nama || '-'}
+                      </strong>
+                    </div>
+                    <div>
+                      <span className="text-slate-500 block">Dosen Pembimbing Skripsi 2</span>
+                      <strong className="text-slate-900 font-semibold mt-0.5 block">
+                        {activeDetailMhs.dosenPembimbing2Nama || '-'}
+                      </strong>
+                    </div>
+                  </div>
+                  <div>
+                    <span className="text-slate-500 block">Judul Usulan Skripsi</span>
+                    {activeDetailMhs.judulSkripsi ? (
+                      <p className="text-slate-900 font-medium mt-0.5 italic">
+                        "{activeDetailMhs.judulSkripsi}"
+                      </p>
+                    ) : (
+                      <p className="text-slate-400 italic mt-0.5">-</p>
+                    )}
+                  </div>
                 </div>
               </div>
 
               {/* Data Kegiatan Luar Kampus (KLK) */}
               {(() => {
-                const klkData = getMahasiswaKlk(detailMhs);
+                const klkData = getMahasiswaKlk(activeDetailMhs);
                 return (
                   <div>
                     <h4 className="font-bold text-[#002B49] text-xs uppercase tracking-wider mb-2 border-b border-slate-200 pb-1 flex items-center justify-between">
@@ -1327,13 +1564,29 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
               <span className="text-[11px] text-slate-500">
                 Pangkalan Data SIM-SIKMA Kimia FSTeM UB
               </span>
-              <button
-                type="button"
-                onClick={() => setDetailMhs(null)}
-                className="px-4 py-1.5 bg-[#002B49] text-white font-bold rounded-lg text-xs hover:bg-[#003865] cursor-pointer"
-              >
-                Tutup
-              </button>
+              <div className="flex items-center gap-2">
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = activeDetailMhs;
+                      setDetailMhs(null);
+                      handleOpenEdit(target);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-lg text-xs cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Edit Data</span>
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setDetailMhs(null)}
+                  className="px-4 py-1.5 bg-[#002B49] text-white font-bold rounded-lg text-xs hover:bg-[#003865] cursor-pointer"
+                >
+                  Tutup
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -1516,60 +1769,66 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Tahun Angkatan <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={formData.angkatan}
-                    onChange={(e) => setFormData({ ...formData, angkatan: e.target.value })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
-                  >
-                    <option value="2020">2020</option>
-                    <option value="2021">2021</option>
-                    <option value="2022">2022</option>
-                    <option value="2023">2023</option>
-                    <option value="2024">2024</option>
-                    <option value="2025">2025</option>
-                    <option value="2026">2026</option>
-                  </select>
-                </div>
+              <div className="space-y-1.5">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Tahun Angkatan <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={formData.angkatan}
+                      onChange={(e) => handleAngkatanChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
+                    >
+                      {angkatanSelectOptions.map((yr) => (
+                        <option key={yr} value={yr}>
+                          {yr} (Semester {getCorrelatedSemester(yr)})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Semester Aktif <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={14}
-                    value={formData.semester}
-                    onChange={(e) => setFormData({ ...formData, semester: Number(e.target.value) })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none font-bold"
-                  />
-                </div>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Semester Aktif <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={formData.semester}
+                      onChange={(e) => handleSemesterChange(e.target.value)}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-bold"
+                    >
+                      {semesterSelectOptions.map((sem) => (
+                        <option key={sem} value={String(sem)}>
+                          Semester {sem} (Angkatan {getCorrelatedAngkatan(String(sem))})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
 
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">
-                    Status Akademik <span className="text-red-500">*</span>
-                  </label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as Mahasiswa['status'] })}
-                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
-                  >
-                    <option value="Aktif">Aktif</option>
-                    <option value="Cuti">Cuti</option>
-                    <option value="Lulus">Lulus</option>
-                  </select>
+                  <div>
+                    <label className="block font-bold text-slate-700 mb-1">
+                      Status Akademik <span className="text-red-500">*</span>
+                    </label>
+                    <select
+                      value={formData.status}
+                      onChange={(e) => setFormData({ ...formData, status: e.target.value as Mahasiswa['status'] })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
+                    >
+                      <option value="Aktif">Aktif</option>
+                      <option value="Cuti">Cuti</option>
+                      <option value="Lulus">Lulus</option>
+                    </select>
+                  </div>
                 </div>
+                <p className="text-[11px] text-slate-500">
+                  Tahun Angkatan dan Semester Aktif berkorelasi otomatis sesuai periode berjalan ({activeSemesterFromDb?.namaSemester || 'Ganjil 2026 / 2027'}).
+                </p>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">
-                    Dosen Pembimbing Akademik (PA) <span className="text-red-500">*</span>
+                    Dosen Pembimbing Akademik (PA)
                   </label>
                   <select
                     value={formData.dosenPANama}
@@ -1577,9 +1836,13 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none bg-white font-medium"
                   >
                     <option value="">-- Pilih Dosen Pembimbing Akademik --</option>
-                    {dosenList.map((d) => (
-                      <option key={d.id} value={`${d.nama}, ${d.gelar}`}>
-                        {d.nama}, {d.gelar} ({d.bidang})
+                    {formData.dosenPANama &&
+                      !dosenSelectOptions.some((opt) => opt.label === formData.dosenPANama) && (
+                        <option value={formData.dosenPANama}>{formData.dosenPANama}</option>
+                      )}
+                    {dosenSelectOptions.map((opt) => (
+                      <option key={opt.id} value={opt.label}>
+                        {opt.label} ({opt.bidang})
                       </option>
                     ))}
                   </select>
@@ -1589,9 +1852,39 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                   <label className="block font-bold text-slate-700 mb-1">Program Studi</label>
                   <input
                     type="text"
+                    list="prodi-kimia-options"
                     value={formData.programStudi}
                     onChange={(e) => setFormData({ ...formData, programStudi: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                  />
+                  <datalist id="prodi-kimia-options">
+                    <option value="S1 Kimia - FMIPA Universitas Brawijaya" />
+                    <option value="S2 Kimia - FMIPA Universitas Brawijaya" />
+                    <option value="S3 Kimia - FMIPA Universitas Brawijaya" />
+                  </datalist>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Email Mahasiswa</label>
+                  <input
+                    type="email"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    placeholder="nama@student.ub.ac.id"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">No. HP / WhatsApp</label>
+                  <input
+                    type="text"
+                    value={formData.telepon}
+                    onChange={(e) => setFormData({ ...formData, telepon: e.target.value })}
+                    placeholder="0812-xxxx-xxxx"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono focus:ring-2 focus:ring-[#002B49] focus:outline-none"
                   />
                 </div>
               </div>
@@ -1607,7 +1900,7 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                     min="0.00"
                     max="4.00"
                     value={formData.ipk}
-                    onChange={(e) => setFormData({ ...formData, ipk: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => setFormData({ ...formData, ipk: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-[#002B49]"
                   />
                 </div>
@@ -1619,9 +1912,9 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                   <input
                     type="number"
                     min={0}
-                    max={160}
+                    max={200}
                     value={formData.totalSks}
-                    onChange={(e) => setFormData({ ...formData, totalSks: parseInt(e.target.value, 10) || 0 })}
+                    onChange={(e) => setFormData({ ...formData, totalSks: e.target.value })}
                     className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs font-mono font-bold focus:ring-2 focus:ring-[#002B49]"
                   />
                 </div>
@@ -1657,15 +1950,69 @@ export const MahasiswaManagement: React.FC<MahasiswaManagementProps> = ({
                     <label className="block font-semibold text-slate-700 mb-1">Laboratorium Riset</label>
                     <select
                       value={formData.labPenelitian}
-                      onChange={(e) => setFormData({ ...formData, labPenelitian: e.target.value as LabRiset })}
+                      onChange={(e) => setFormData({ ...formData, labPenelitian: e.target.value as LabRiset | '' })}
                       className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
                     >
+                      <option value="">-- Belum Ditentukan --</option>
+                      {formData.labPenelitian &&
+                        ![
+                          'Laboratorium Kimia Analitik & Instrumentasi',
+                          'Laboratorium Kimia Organik & Bahan Alam',
+                          'Laboratorium Kimia Anorganik & Material',
+                          'Laboratorium Kimia Fisik & Elektrokimia',
+                          'Laboratorium Biokimia & Enzim',
+                          'Laboratorium Kimia Lingkungan'
+                        ].includes(formData.labPenelitian) && (
+                          <option value={formData.labPenelitian}>{formData.labPenelitian}</option>
+                        )}
                       <option value="Laboratorium Kimia Analitik & Instrumentasi">Laboratorium Kimia Analitik & Instrumentasi</option>
                       <option value="Laboratorium Kimia Organik & Bahan Alam">Laboratorium Kimia Organik & Bahan Alam</option>
                       <option value="Laboratorium Kimia Anorganik & Material">Laboratorium Kimia Anorganik & Material</option>
                       <option value="Laboratorium Kimia Fisik & Elektrokimia">Laboratorium Kimia Fisik & Elektrokimia</option>
                       <option value="Laboratorium Biokimia & Enzim">Laboratorium Biokimia & Enzim</option>
                       <option value="Laboratorium Kimia Lingkungan">Laboratorium Kimia Lingkungan</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Dosen Pembimbing Skripsi 1</label>
+                    <select
+                      value={formData.dosenPembimbing1Nama}
+                      onChange={(e) => setFormData({ ...formData, dosenPembimbing1Nama: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
+                    >
+                      <option value="">-- Pilih Pembimbing 1 --</option>
+                      {formData.dosenPembimbing1Nama &&
+                        !dosenSelectOptions.some((opt) => opt.label === formData.dosenPembimbing1Nama) && (
+                          <option value={formData.dosenPembimbing1Nama}>{formData.dosenPembimbing1Nama}</option>
+                        )}
+                      {dosenSelectOptions.map((opt) => (
+                        <option key={opt.id} value={opt.label}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block font-semibold text-slate-700 mb-1">Dosen Pembimbing Skripsi 2</label>
+                    <select
+                      value={formData.dosenPembimbing2Nama}
+                      onChange={(e) => setFormData({ ...formData, dosenPembimbing2Nama: e.target.value })}
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-xs bg-white"
+                    >
+                      <option value="">-- Pilih Pembimbing 2 --</option>
+                      {formData.dosenPembimbing2Nama &&
+                        !dosenSelectOptions.some((opt) => opt.label === formData.dosenPembimbing2Nama) && (
+                          <option value={formData.dosenPembimbing2Nama}>{formData.dosenPembimbing2Nama}</option>
+                        )}
+                      {dosenSelectOptions.map((opt) => (
+                        <option key={opt.id} value={opt.label}>
+                          {opt.label}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>

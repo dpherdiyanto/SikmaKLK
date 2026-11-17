@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Dosen, BidangKeahlianKimia, LabRiset, UserRole, Mahasiswa, PengajuanKLK } from '../types/sikma';
+import { Dosen, BidangKeahlianKimia, LabRiset, UserRole, Mahasiswa, PengajuanKLK, isMahasiswaRole } from '../types/sikma';
 import {
   Users,
   Search,
@@ -68,6 +68,10 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
 
   // Modals state
   const [detailDosen, setDetailDosen] = useState<Dosen | null>(null);
+  const activeDetailDosen = useMemo(
+    () => (detailDosen ? dosenList.find((d) => d.id === detailDosen.id) ?? detailDosen : null),
+    [detailDosen, dosenList]
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingDosen, setEditingDosen] = useState<Dosen | null>(null);
   const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
@@ -179,7 +183,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
   // Handle Save New Dosen
   const handleSaveAdd = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentRole === 'mahasiswa' || currentRole === 'dosen') return;
+    if (isMahasiswaRole(currentRole) || currentRole === 'dosen') return;
 
     if (!formData.nama || !formData.email) {
       showFlash('error', 'Harap isi Nama Lengkap dan Email Dosen.');
@@ -188,21 +192,21 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
 
     const newDosen: Dosen = {
       id: `dos-${Date.now()}`,
-      nip: '',
-      nidn: formData.nidn || '',
-      nama: formData.nama,
-      gelar: formData.gelar,
+      nip: formData.nip.trim(),
+      nidn: formData.nidn.trim(),
+      nama: formData.nama.trim(),
+      gelar: formData.gelar.trim(),
       bidang: formData.bidang,
       lab: formData.lab,
-      email: formData.email.includes('@') ? formData.email : `${formData.email}@ub.ac.id`,
+      email: formData.email.includes('@') ? formData.email.trim() : `${formData.email.trim()}@ub.ac.id`,
       jabatanAkademik: formData.jabatanAkademik,
       status: formData.status,
       kuotaBimbingan: Number(formData.kuotaBimbingan) || 8,
       jumlahBimbingan: 0,
       matakuliah: formData.matakuliahInput.split(',').map((s) => s.trim()).filter(Boolean),
       topikRiset: formData.topikRisetInput.split(',').map((s) => s.trim()).filter(Boolean),
-      ruangKantor: formData.ruangKantor,
-      telepon: formData.telepon
+      ruangKantor: formData.ruangKantor.trim(),
+      telepon: formData.telepon.trim()
     };
 
     onAddDosen(newDosen);
@@ -213,59 +217,62 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
 
   // Open Edit Modal
   const handleOpenEdit = (d: Dosen) => {
-    if (currentRole === 'mahasiswa') return;
+    if (isMahasiswaRole(currentRole)) return;
     setEditingDosen(d);
     setFormData({
       nip: d.nip || '',
-      nidn: d.nidn,
+      nidn: d.nidn || '',
       nama: d.nama,
-      gelar: d.gelar,
+      gelar: d.gelar || '',
       bidang: d.bidang,
       lab: d.lab,
       email: d.email,
       jabatanAkademik: d.jabatanAkademik,
       status: d.status,
       kuotaBimbingan: d.kuotaBimbingan,
-      ruangKantor: d.ruangKantor,
-      telepon: d.telepon,
-      matakuliahInput: d.matakuliah.join(', '),
-      topikRisetInput: d.topikRiset.join(', ')
+      ruangKantor: d.ruangKantor || '',
+      telepon: d.telepon || '',
+      matakuliahInput: (d.matakuliah || []).join(', '),
+      topikRisetInput: (d.topikRiset || []).join(', ')
     });
   };
 
   // Handle Save Edit
   const handleSaveEdit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentRole === 'mahasiswa' || !editingDosen) return;
+    if (isMahasiswaRole(currentRole) || !editingDosen) return;
 
     const updated: Dosen = {
       ...editingDosen,
-      nip: formData.nip || editingDosen.nip || '',
-      nidn: formData.nidn,
-      nama: formData.nama,
-      gelar: formData.gelar,
+      nip: formData.nip.trim(),
+      nidn: formData.nidn.trim(),
+      nama: formData.nama.trim(),
+      gelar: formData.gelar.trim(),
       bidang: formData.bidang,
       lab: formData.lab,
       unit: editingDosen.lab !== formData.lab ? formData.lab : editingDosen.unit,
       jabatan: editingDosen.jabatanAkademik !== formData.jabatanAkademik ? formData.jabatanAkademik : editingDosen.jabatan,
-      email: formData.email,
+      email: formData.email.trim(),
       jabatanAkademik: formData.jabatanAkademik,
       status: formData.status,
-      kuotaBimbingan: Number(formData.kuotaBimbingan),
+      kuotaBimbingan: Number(formData.kuotaBimbingan) || 1,
       matakuliah: formData.matakuliahInput.split(',').map((s) => s.trim()).filter(Boolean),
       topikRiset: formData.topikRisetInput.split(',').map((s) => s.trim()).filter(Boolean),
-      ruangKantor: formData.ruangKantor,
-      telepon: formData.telepon
+      ruangKantor: formData.ruangKantor.trim(),
+      telepon: formData.telepon.trim()
     };
 
     onUpdateDosen(updated);
+    if (detailDosen && detailDosen.id === updated.id) {
+      setDetailDosen(updated);
+    }
     setEditingDosen(null);
     showFlash('success', `Perubahan data dosen ${updated.nama} berhasil diperbarui.`);
   };
 
   // Handle Delete
   const handleDelete = (d: Dosen) => {
-    if (currentRole === 'mahasiswa' || currentRole === 'dosen') return;
+    if (isMahasiswaRole(currentRole) || currentRole === 'dosen') return;
     if (window.confirm(`Apakah Anda yakin ingin menghapus data Dosen ${d.nama}, ${d.gelar} dari SIKMA Kimia UB?`)) {
       onDeleteDosen(d.id);
       showFlash('success', `Data Dosen ${d.nama} telah dihapus.`);
@@ -275,7 +282,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
   // Handle Assign Mahasiswa
   const handleAssignSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (currentRole === 'mahasiswa' || !assignTargetDosen) return;
+    if (isMahasiswaRole(currentRole) || !assignTargetDosen) return;
     if (!newStudentName || !newStudentNim) {
       alert('Nama mahasiswa dan NIM wajib diisi.');
       return;
@@ -490,7 +497,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 <tr>
                   <th className="px-4 py-3.5 w-12 text-center">No</th>
                   <th className="px-4 py-3.5">Identitas & Gelar Dosen</th>
-                  {currentRole !== 'mahasiswa' && (
+                  {!isMahasiswaRole(currentRole) && (
                     <th className="px-4 py-3.5">NIDN</th>
                   )}
                   <th className="px-4 py-3.5">Bidang Keahlian (KBK)</th>
@@ -520,7 +527,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
               <tbody className="divide-y divide-slate-100">
                 {filteredDosen.length === 0 ? (
                   <tr>
-                    <td colSpan={currentRole === 'mahasiswa' ? 6 : 7} className="px-4 py-8 text-center text-slate-400">
+                    <td colSpan={isMahasiswaRole(currentRole) ? 6 : 7} className="px-4 py-8 text-center text-slate-400">
                       Tidak ada data dosen yang sesuai dengan kriteria pencarian.
                     </td>
                   </tr>
@@ -540,13 +547,13 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                             <Mail className="w-3 h-3 text-slate-400" />
                             <span>{d.email}</span>
                           </div>
-                          {currentRole !== 'mahasiswa' && (
+                          {!isMahasiswaRole(currentRole) && (
                             <div className="text-[10px] text-slate-400 mt-0.5">
                               {d.jabatanAkademik} • {d.ruangKantor}
                             </div>
                           )}
                         </td>
-                        {currentRole !== 'mahasiswa' && (
+                        {!isMahasiswaRole(currentRole) && (
                           <td className="px-4 py-3">
                             <div className="font-mono text-slate-800 font-medium">{d.nidn || '-'}</div>
                           </td>
@@ -602,7 +609,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                             </button>
 
                             {/* Button Tugaskan Mahasiswa: dapat diakses Dosen, Admin, dan Super Admin (tidak terlihat pada Mahasiswa) */}
-                            {currentRole !== 'mahasiswa' && (
+                            {!isMahasiswaRole(currentRole) && (
                               <button
                                 onClick={() => {
                                   setAssignTargetDosen(d);
@@ -616,7 +623,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                             )}
 
                             {/* Button Edit Data Dosen: dapat diakses Dosen, Admin, dan Super Admin (tidak terlihat pada Mahasiswa) */}
-                            {currentRole !== 'mahasiswa' && (
+                            {!isMahasiswaRole(currentRole) && (
                               <button
                                 onClick={() => handleOpenEdit(d)}
                                 title="Edit Data Dosen"
@@ -822,7 +829,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                       <h3 className="text-sm font-bold text-slate-900 leading-snug">
                         {d.nama}, {d.gelar}
                       </h3>
-                      {currentRole !== 'mahasiswa' && (
+                      {!isMahasiswaRole(currentRole) && (
                         <p className="text-[11px] text-slate-500 font-mono mt-0.5">NIDN: {d.nidn || '-'}</p>
                       )}
                     </div>
@@ -832,7 +839,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                         <FlaskConical className="w-3.5 h-3.5 text-[#002B49] flex-shrink-0" />
                         <span className="line-clamp-1">{d.lab}</span>
                       </div>
-                      {currentRole !== 'mahasiswa' && (
+                      {!isMahasiswaRole(currentRole) && (
                         <div className="flex items-center space-x-2 text-[11px]">
                           <Building className="w-3.5 h-3.5 text-[#002B49] flex-shrink-0" />
                           <span>{d.ruangKantor}</span>
@@ -867,7 +874,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                       Detail Profil &rarr;
                     </button>
                     <div className="flex items-center space-x-1">
-                      {currentRole !== 'mahasiswa' && (
+                      {!isMahasiswaRole(currentRole) && (
                         <button
                           onClick={() => handleOpenEdit(d)}
                           className="p-1.5 rounded hover:bg-amber-100 text-amber-700 cursor-pointer"
@@ -1032,7 +1039,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       )}
 
       {/* MODAL 1: Tambah Dosen Baru */}
-      {isAddModalOpen && currentRole !== 'mahasiswa' && currentRole !== 'dosen' && (
+      {isAddModalOpen && !isMahasiswaRole(currentRole) && currentRole !== 'dosen' && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
             <div className="p-5 bg-[#002B49] text-white flex items-center justify-between">
@@ -1226,7 +1233,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       )}
 
       {/* MODAL 2: Edit Dosen */}
-      {editingDosen && currentRole !== 'mahasiswa' && (
+      {editingDosen && !isMahasiswaRole(currentRole) && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
             <div className="p-5 bg-amber-700 text-white flex items-center justify-between">
@@ -1248,19 +1255,31 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
             </div>
 
             <form onSubmit={handleSaveEdit} className="p-6 space-y-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">NIDN (Nomor Induk Dosen Nasional)</label>
-                <input
-                  type="text"
-                  value={formData.nidn}
-                  onChange={(e) => setFormData({ ...formData, nidn: e.target.value })}
-                  className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-amber-500 focus:outline-none"
-                />
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">NIP (Nomor Induk Pegawai)</label>
+                  <input
+                    type="text"
+                    value={formData.nip}
+                    onChange={(e) => setFormData({ ...formData, nip: e.target.value })}
+                    placeholder="Contoh: 197804122005011002"
+                    className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">NIDN (Nomor Induk Dosen Nasional)</label>
+                  <input
+                    type="text"
+                    value={formData.nidn}
+                    onChange={(e) => setFormData({ ...formData, nidn: e.target.value })}
+                    className="w-full p-2 border border-slate-300 rounded font-mono focus:ring-2 focus:ring-amber-500 focus:outline-none"
+                  />
+                </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div className="sm:col-span-2">
-                  <label className="block font-semibold text-slate-700 mb-1">Nama Lengkap</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Nama Lengkap (tanpa gelar)</label>
                   <input
                     type="text"
                     required
@@ -1273,9 +1292,9 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                   <label className="block font-semibold text-slate-700 mb-1">Gelar Akademik</label>
                   <input
                     type="text"
-                    required
                     value={formData.gelar}
                     onChange={(e) => setFormData({ ...formData, gelar: e.target.value })}
+                    placeholder="Contoh: M.Si., Ph.D"
                     className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-amber-500 focus:outline-none"
                   />
                 </div>
@@ -1313,7 +1332,35 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Jabatan Fungsional</label>
+                  <select
+                    value={formData.jabatanAkademik}
+                    onChange={(e) => setFormData({ ...formData, jabatanAkademik: e.target.value as Dosen['jabatanAkademik'] })}
+                    className="w-full p-2 border border-slate-300 rounded bg-white"
+                  >
+                    <option value="Asisten Ahli">Asisten Ahli</option>
+                    <option value="Lektor">Lektor</option>
+                    <option value="Lektor Kepala">Lektor Kepala</option>
+                    <option value="Guru Besar (Profesor)">Guru Besar (Profesor)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Status Mengajar</label>
+                  <select
+                    value={formData.status}
+                    onChange={(e) => setFormData({ ...formData, status: e.target.value as Dosen['status'] })}
+                    className="w-full p-2 border border-slate-300 rounded bg-white"
+                  >
+                    <option value="Aktif Mengajar">Aktif Mengajar</option>
+                    <option value="Tugas Belajar">Tugas Belajar</option>
+                    <option value="Cuti Riset">Cuti Riset</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Email UB</label>
                   <input
@@ -1323,18 +1370,6 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                     onChange={(e) => setFormData({ ...formData, email: e.target.value })}
                     className="w-full p-2 border border-slate-300 rounded"
                   />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Status Mengajar</label>
-                  <select
-                    value={formData.status}
-                    onChange={(e) => setFormData({ ...formData, status: e.target.value as any })}
-                    className="w-full p-2 border border-slate-300 rounded bg-white"
-                  >
-                    <option value="Aktif Mengajar">Aktif Mengajar</option>
-                    <option value="Tugas Belajar">Tugas Belajar</option>
-                    <option value="Cuti Riset">Cuti Riset</option>
-                  </select>
                 </div>
                 <div>
                   <label className="block font-semibold text-slate-700 mb-1">Maks. Kuota Bimbingan</label>
@@ -1349,8 +1384,42 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 </div>
               </div>
 
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Ruang Kantor di Gedung Kimia</label>
+                  <input
+                    type="text"
+                    value={formData.ruangKantor}
+                    onChange={(e) => setFormData({ ...formData, ruangKantor: e.target.value })}
+                    placeholder="Gedung Kimia Lt. 2 R.205"
+                    className="w-full p-2 border border-slate-300 rounded"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Telepon / Ext.</label>
+                  <input
+                    type="text"
+                    value={formData.telepon}
+                    onChange={(e) => setFormData({ ...formData, telepon: e.target.value })}
+                    placeholder="0341-575838 ext 205"
+                    className="w-full p-2 border border-slate-300 rounded"
+                  />
+                </div>
+              </div>
+
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Topik Riset & Kepakaran</label>
+                <label className="block font-semibold text-slate-700 mb-1">Mata Kuliah yang Diampu (pisahkan koma)</label>
+                <input
+                  type="text"
+                  value={formData.matakuliahInput}
+                  onChange={(e) => setFormData({ ...formData, matakuliahInput: e.target.value })}
+                  placeholder="Kimia Organik I, Sintesis Senyawa Organik"
+                  className="w-full p-2 border border-slate-300 rounded"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Topik Riset & Kepakaran (pisahkan koma)</label>
                 <input
                   type="text"
                   value={formData.topikRisetInput}
@@ -1380,7 +1449,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       )}
 
       {/* MODAL 3: Detail Profil & Kepakaran Dosen */}
-      {detailDosen && (
+      {activeDetailDosen && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200">
             <div className="p-5 bg-[#002B49] text-white flex items-center justify-between">
@@ -1389,8 +1458,21 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                   Profil Dosen Departemen Kimia
                 </span>
                 <h3 className="font-bold text-lg leading-snug text-white">
-                  {detailDosen.nama}, {detailDosen.gelar}
+                  {activeDetailDosen.nama}{activeDetailDosen.gelar ? `, ${activeDetailDosen.gelar}` : ''}
                 </h3>
+                <div className="mt-1">
+                  <span
+                    className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                      activeDetailDosen.status === 'Aktif Mengajar'
+                        ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-400/40'
+                        : activeDetailDosen.status === 'Tugas Belajar'
+                        ? 'bg-amber-500/20 text-amber-200 border border-amber-400/40'
+                        : 'bg-slate-500/30 text-slate-200 border border-slate-400/40'
+                    }`}
+                  >
+                    {activeDetailDosen.status}
+                  </span>
+                </div>
               </div>
               <button
                 onClick={() => setDetailDosen(null)}
@@ -1402,18 +1484,22 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
 
             <div className="p-6 space-y-5 text-xs">
               {/* Badge info grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                <div>
+                  <div className="text-[10px] text-slate-400 font-bold uppercase">NIP</div>
+                  <div className="font-mono font-bold text-slate-900">{activeDetailDosen.nip || '-'}</div>
+                </div>
                 <div>
                   <div className="text-[10px] text-slate-400 font-bold uppercase">NIDN</div>
-                  <div className="font-mono font-bold text-slate-900">{detailDosen.nidn || '-'}</div>
+                  <div className="font-mono font-bold text-slate-900">{activeDetailDosen.nidn || '-'}</div>
                 </div>
                 <div>
                   <div className="text-[10px] text-slate-400 font-bold uppercase">Bidang (KBK)</div>
-                  <div className="font-bold text-[#002B49]">{detailDosen.bidang}</div>
+                  <div className="font-bold text-[#002B49]">{activeDetailDosen.bidang}</div>
                 </div>
                 <div>
                   <div className="text-[10px] text-slate-400 font-bold uppercase">Jabatan</div>
-                  <div className="font-bold text-slate-800">{detailDosen.jabatanAkademik}</div>
+                  <div className="font-bold text-slate-800">{activeDetailDosen.jabatanAkademik}</div>
                 </div>
               </div>
 
@@ -1423,19 +1509,19 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-slate-700">
                   <div>
                     <strong>Laboratorium:</strong>
-                    <p className="text-slate-600">{detailDosen.lab}</p>
+                    <p className="text-slate-600">{activeDetailDosen.lab || '-'}</p>
                   </div>
                   <div>
                     <strong>Ruang Kantor:</strong>
-                    <p className="text-slate-600">{detailDosen.ruangKantor}</p>
+                    <p className="text-slate-600">{activeDetailDosen.ruangKantor || '-'}</p>
                   </div>
                   <div>
                     <strong>Email UB:</strong>
-                    <p className="text-slate-600 font-mono">{detailDosen.email}</p>
+                    <p className="text-slate-600 font-mono">{activeDetailDosen.email || '-'}</p>
                   </div>
                   <div>
                     <strong>Telepon / Ext.:</strong>
-                    <p className="text-slate-600 font-mono">{detailDosen.telepon}</p>
+                    <p className="text-slate-600 font-mono">{activeDetailDosen.telepon || '-'}</p>
                   </div>
                 </div>
               </div>
@@ -1445,17 +1531,21 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
                 <h4 className="font-bold text-slate-900 border-b pb-1 flex items-center justify-between">
                   <span>Beban Bimbingan Tugas Akhir</span>
                   <span className="text-[11px] font-normal text-slate-500">
-                    Kuota: {detailDosen.jumlahBimbingan} dari {detailDosen.kuotaBimbingan} Mahasiswa
+                    Kuota: {activeDetailDosen.jumlahBimbingan} dari {activeDetailDosen.kuotaBimbingan} Mahasiswa
                   </span>
                 </h4>
                 <div className="w-full bg-slate-100 rounded-full h-2">
                   <div
                     className="bg-[#D4AF37] h-2 rounded-full"
                     style={{
-                      width: `${Math.min(
-                        100,
-                        Math.round((detailDosen.jumlahBimbingan / detailDosen.kuotaBimbingan) * 100)
-                      )}%`
+                      width: `${
+                        activeDetailDosen.kuotaBimbingan > 0
+                          ? Math.min(
+                              100,
+                              Math.round((activeDetailDosen.jumlahBimbingan / activeDetailDosen.kuotaBimbingan) * 100)
+                            )
+                          : 0
+                      }%`
                     }}
                   ></div>
                 </div>
@@ -1464,32 +1554,55 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
               {/* Mata Kuliah Pengampu */}
               <div className="space-y-1.5">
                 <h4 className="font-bold text-slate-900 border-b pb-1">Mata Kuliah yang Diampu</h4>
-                <div className="flex flex-wrap gap-1.5">
-                  {detailDosen.matakuliah.map((mk, i) => (
-                    <span
-                      key={i}
-                      className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded text-[11px] font-medium"
-                    >
-                      {mk}
-                    </span>
-                  ))}
-                </div>
+                {activeDetailDosen.matakuliah && activeDetailDosen.matakuliah.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {activeDetailDosen.matakuliah.map((mk, i) => (
+                      <span
+                        key={i}
+                        className="px-2.5 py-1 bg-slate-100 text-slate-800 rounded text-[11px] font-medium"
+                      >
+                        {mk}
+                      </span>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-400 italic">-</p>
+                )}
               </div>
 
               {/* Topik Riset */}
               <div className="space-y-1.5">
                 <h4 className="font-bold text-slate-900 border-b pb-1">Fokus Riset & Kepakaran</h4>
-                <ul className="list-disc list-inside space-y-1 text-slate-700">
-                  {detailDosen.topikRiset.map((t, i) => (
-                    <li key={i}>{t}</li>
-                  ))}
-                </ul>
+                {activeDetailDosen.topikRiset && activeDetailDosen.topikRiset.length > 0 ? (
+                  <ul className="list-disc list-inside space-y-1 text-slate-700">
+                    {activeDetailDosen.topikRiset.map((t, i) => (
+                      <li key={i}>{t}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-slate-400 italic">-</p>
+                )}
               </div>
 
-              <div className="pt-4 border-t border-slate-200 flex justify-end">
+              <div className="pt-4 border-t border-slate-200 flex justify-end gap-2">
+                {!isMahasiswaRole(currentRole) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const target = activeDetailDosen;
+                      setDetailDosen(null);
+                      handleOpenEdit(target);
+                    }}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded font-semibold cursor-pointer"
+                  >
+                    <Edit2 className="w-3.5 h-3.5" />
+                    <span>Edit Data</span>
+                  </button>
+                )}
                 <button
+                  type="button"
                   onClick={() => setDetailDosen(null)}
-                  className="px-4 py-2 bg-[#002B49] text-white rounded font-semibold hover:bg-[#003865]"
+                  className="px-4 py-2 bg-[#002B49] text-white rounded font-semibold hover:bg-[#003865] cursor-pointer"
                 >
                   Tutup
                 </button>
@@ -1500,7 +1613,7 @@ export const DosenManagement: React.FC<DosenManagementProps> = ({
       )}
 
       {/* MODAL 4: Tugaskan Mahasiswa Bimbingan */}
-      {isAssignModalOpen && assignTargetDosen && currentRole !== 'mahasiswa' && (
+      {isAssignModalOpen && assignTargetDosen && !isMahasiswaRole(currentRole) && (
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-xl max-w-md w-full border border-slate-200">
             <div className="p-4 bg-[#002B49] text-white flex items-center justify-between rounded-t-xl">

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { AdminStaff, UserRole } from '../types/sikma';
+import { AdminStaff, UserRole, isMahasiswaRole } from '../types/sikma';
 import {
   Users,
   Search,
@@ -55,6 +55,10 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
 
   // Modals state
   const [detailAdmin, setDetailAdmin] = useState<AdminStaff | null>(null);
+  const activeDetailAdmin = useMemo(
+    () => (detailAdmin ? adminList.find((a) => a.id === detailAdmin.id) ?? detailAdmin : null),
+    [detailAdmin, adminList]
+  );
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingAdmin, setEditingAdmin] = useState<AdminStaff | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -172,38 +176,41 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
     if (editingAdmin) {
       const updated: AdminStaff = {
         ...editingAdmin,
-        nip: formData.nip || editingAdmin.nip || '',
-        nama: formData.nama,
-        gelar: formData.gelar,
-        jabatan: formData.jabatan,
-        unit: formData.unit,
-        tupoksi: tupoksiArray.length > 0 ? tupoksiArray : editingAdmin.tupoksi,
-        email: formData.email,
-        telepon: formData.telepon,
-        ruangKantor: formData.ruangKantor,
+        nip: formData.nip.trim(),
+        nama: formData.nama.trim(),
+        gelar: formData.gelar.trim(),
+        jabatan: formData.jabatan.trim(),
+        unit: formData.unit.trim(),
+        tupoksi: tupoksiArray,
+        email: formData.email.trim(),
+        telepon: formData.telepon.trim(),
+        ruangKantor: formData.ruangKantor.trim(),
         status: formData.status,
-        pendidikanTerakhir: formData.pendidikanTerakhir
+        pendidikanTerakhir: formData.pendidikanTerakhir.trim()
       };
       onUpdateAdmin(updated);
+      if (detailAdmin && detailAdmin.id === updated.id) {
+        setDetailAdmin(updated);
+      }
       showFlash('success', `Data admin ${updated.nama} berhasil diperbarui.`);
       setEditingAdmin(null);
     } else {
       const newAdmin: AdminStaff = {
         id: `adm-${Date.now()}`,
-        nip: '',
-        nama: formData.nama,
-        gelar: formData.gelar,
-        jabatan: formData.jabatan,
-        unit: formData.unit,
+        nip: formData.nip.trim(),
+        nama: formData.nama.trim(),
+        gelar: formData.gelar.trim(),
+        jabatan: formData.jabatan.trim(),
+        unit: formData.unit.trim(),
         tupoksi:
           tupoksiArray.length > 0
             ? tupoksiArray
             : ['Pengelolaan administrasi & layanan dokumen akademik'],
-        email: formData.email || `${formData.nama.toLowerCase().replace(/\s+/g, '.')}@ub.ac.id`,
-        telepon: formData.telepon || '0812-0000-0000',
-        ruangKantor: formData.ruangKantor,
+        email: formData.email.trim() || `${formData.nama.toLowerCase().replace(/\s+/g, '.')}@ub.ac.id`,
+        telepon: formData.telepon.trim() || '0812-0000-0000',
+        ruangKantor: formData.ruangKantor.trim(),
         status: formData.status,
-        pendidikanTerakhir: formData.pendidikanTerakhir
+        pendidikanTerakhir: formData.pendidikanTerakhir.trim()
       };
       onAddAdmin(newAdmin);
       showFlash('success', `Admin baru ${newAdmin.nama} berhasil ditambahkan.`);
@@ -468,7 +475,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                           NIP. {admin.nip}
                         </div>
                       )}
-                      {currentRole !== 'mahasiswa' && admin.pendidikanTerakhir && (
+                      {!isMahasiswaRole(currentRole) && admin.pendidikanTerakhir && (
                         <div className="text-[10px] text-blue-700 bg-blue-50 px-1.5 py-0.5 rounded inline-block mt-1 font-medium border border-blue-100">
                           {admin.pendidikanTerakhir}
                         </div>
@@ -479,7 +486,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                       <div className="font-semibold text-slate-800 text-xs leading-snug">
                         {admin.jabatan}
                       </div>
-                      {currentRole !== 'mahasiswa' && (
+                      {!isMahasiswaRole(currentRole) && (
                         <div className="text-[11px] text-slate-500 flex items-center gap-1 mt-1">
                           <Building2 className="w-3 h-3 text-slate-400 shrink-0" />
                           <span className="truncate max-w-[220px]">{admin.unit}</span>
@@ -509,7 +516,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                           <Mail className="w-3 h-3 text-slate-400 shrink-0" />
                           <span className="truncate max-w-[150px]">{admin.email}</span>
                         </div>
-                        {currentRole !== 'mahasiswa' && (
+                        {!isMahasiswaRole(currentRole) && (
                           <>
                             <div className="flex items-center gap-1 text-slate-600">
                               <Phone className="w-3 h-3 text-slate-400 shrink-0" />
@@ -718,7 +725,7 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
       </div>
 
       {/* Modal Detail Admin */}
-      {detailAdmin && (
+      {activeDetailAdmin && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-2xs animate-fadeIn">
           <div className="bg-white rounded-xl shadow-xl w-full max-w-xl border border-slate-200 overflow-hidden">
             <div className="p-4 bg-[#002B49] text-white flex items-center justify-between">
@@ -738,65 +745,72 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
               <div className="flex items-start justify-between pb-3 border-b border-slate-100">
                 <div>
                   <h4 className="text-base font-bold text-slate-900">
-                    {detailAdmin.nama}, {detailAdmin.gelar}
+                    {activeDetailAdmin.nama}{activeDetailAdmin.gelar ? `, ${activeDetailAdmin.gelar}` : ''}
                   </h4>
+                  {!isMahasiswaRole(currentRole) && (
+                    <div className="text-xs font-mono text-slate-500 mt-0.5">
+                      NIP. {activeDetailAdmin.nip || '-'}
+                    </div>
+                  )}
                   <p className="text-xs font-medium text-blue-900 bg-blue-50 px-2 py-0.5 rounded-md inline-block mt-1">
-                    {detailAdmin.jabatan}
+                    {activeDetailAdmin.jabatan || '-'}
                   </p>
                 </div>
                 <span
                   className={`px-2.5 py-1 rounded-full text-xs font-bold ${
-                    detailAdmin.status === 'Aktif'
+                    activeDetailAdmin.status === 'Aktif'
                       ? 'bg-emerald-100 text-emerald-800'
-                      : 'bg-amber-100 text-amber-800'
+                      : activeDetailAdmin.status === 'Cuti'
+                      ? 'bg-amber-100 text-amber-800'
+                      : 'bg-slate-100 text-slate-700'
                   }`}
                 >
-                  {detailAdmin.status}
+                  {activeDetailAdmin.status}
                 </span>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
                     <div className="text-slate-400 font-medium flex items-center gap-1">
                       <Building2 className="w-3.5 h-3.5" /> Unit Kerja
                     </div>
-                    <div className="text-slate-800 font-semibold mt-1">{detailAdmin.unit}</div>
+                    <div className="text-slate-800 font-semibold mt-1">{activeDetailAdmin.unit || '-'}</div>
                   </div>
                 )}
 
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
                     <div className="text-slate-400 font-medium flex items-center gap-1">
                       <MapPin className="w-3.5 h-3.5 text-amber-600" /> Ruang Kantor
                     </div>
-                    <div className="text-slate-800 font-semibold mt-1">{detailAdmin.ruangKantor}</div>
+                    <div className="text-slate-800 font-semibold mt-1">{activeDetailAdmin.ruangKantor || '-'}</div>
                   </div>
                 )}
 
-                <div className={`p-3 bg-slate-50 rounded-lg border border-slate-200/80 ${currentRole === 'mahasiswa' ? 'sm:col-span-2' : ''}`}>
+                <div className={`p-3 bg-slate-50 rounded-lg border border-slate-200/80 ${isMahasiswaRole(currentRole) ? 'sm:col-span-2' : ''}`}>
                   <div className="text-slate-400 font-medium flex items-center gap-1">
                     <Mail className="w-3.5 h-3.5" /> Email Resmi UB
                   </div>
-                  <div className="text-slate-800 font-semibold mt-1">{detailAdmin.email}</div>
+                  <div className="text-slate-800 font-semibold mt-1">{activeDetailAdmin.email || '-'}</div>
                 </div>
 
-                {currentRole !== 'mahasiswa' && (
+                {!isMahasiswaRole(currentRole) && (
                   <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80">
                     <div className="text-slate-400 font-medium flex items-center gap-1">
                       <Phone className="w-3.5 h-3.5" /> Kontak WhatsApp / Telepon
                     </div>
-                    <div className="text-slate-800 font-semibold mt-1">{detailAdmin.telepon}</div>
+                    <div className="text-slate-800 font-semibold mt-1">{activeDetailAdmin.telepon || '-'}</div>
                   </div>
                 )}
               </div>
 
-              {currentRole !== 'mahasiswa' && (
+              {!isMahasiswaRole(currentRole) && (
                 <div className="p-3 bg-slate-50 rounded-lg border border-slate-200/80 text-xs">
                   <div className="text-slate-400 font-medium flex items-center gap-1">
                     <GraduationCap className="w-3.5 h-3.5 text-[#002B49]" /> Riwayat Pendidikan Terakhir
                   </div>
-                  <div className="text-slate-800 font-semibold mt-1">{detailAdmin.pendidikanTerakhir}</div>
+                  <div className="text-slate-800 font-semibold mt-1">{activeDetailAdmin.pendidikanTerakhir || '-'}</div>
                 </div>
               )}
 
@@ -805,23 +819,44 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                   <FileText className="w-4 h-4 text-[#002B49]" />
                   <span>Tugas Pokok & Fungsi (Tupoksi):</span>
                 </div>
-                <ul className="space-y-1.5 bg-slate-50 p-3 rounded-lg border border-slate-200">
-                  {detailAdmin.tupoksi.map((t, idx) => (
-                    <li key={idx} className="text-xs text-slate-700 flex items-start gap-2">
-                      <span className="w-4 h-4 rounded-full bg-blue-100 text-[#002B49] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
-                        {idx + 1}
-                      </span>
-                      <span>{t}</span>
-                    </li>
-                  ))}
-                </ul>
+                {activeDetailAdmin.tupoksi && activeDetailAdmin.tupoksi.length > 0 ? (
+                  <ul className="space-y-1.5 bg-slate-50 p-3 rounded-lg border border-slate-200">
+                    {activeDetailAdmin.tupoksi.map((t, idx) => (
+                      <li key={idx} className="text-xs text-slate-700 flex items-start gap-2">
+                        <span className="w-4 h-4 rounded-full bg-blue-100 text-[#002B49] text-[10px] font-bold flex items-center justify-center shrink-0 mt-0.5">
+                          {idx + 1}
+                        </span>
+                        <span>{t}</span>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <p className="text-xs text-slate-400 italic bg-slate-50 p-3 rounded-lg border border-slate-200">
+                    Belum ada tupoksi yang dicatat.
+                  </p>
+                )}
               </div>
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex justify-end gap-2">
+              {canBulkDelete && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = activeDetailAdmin;
+                    setDetailAdmin(null);
+                    handleOpenEdit(target);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold cursor-pointer"
+                >
+                  <Edit2 className="w-3.5 h-3.5" />
+                  <span>Edit Data</span>
+                </button>
+              )}
               <button
+                type="button"
                 onClick={() => setDetailAdmin(null)}
-                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold"
+                className="px-4 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold cursor-pointer"
               >
                 Tutup
               </button>
@@ -878,6 +913,19 @@ export const AdminManagement: React.FC<AdminManagementProps> = ({
                     onChange={(e) => setFormData({ ...formData, gelar: e.target.value })}
                     placeholder="Contoh: S.AP., M.AP."
                     className="w-full text-xs p-2 border border-slate-300 rounded-md focus:ring-1 focus:ring-[#002B49]"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-medium text-slate-700 mb-1">
+                    NIP / Nomor Induk Pegawai
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.nip}
+                    onChange={(e) => setFormData({ ...formData, nip: e.target.value })}
+                    placeholder="Contoh: 199004122019031005"
+                    className="w-full text-xs p-2 font-mono border border-slate-300 rounded-md focus:ring-1 focus:ring-[#002B49]"
                   />
                 </div>
 
