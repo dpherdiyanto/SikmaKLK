@@ -358,7 +358,7 @@ export const extractSksFromMkKonversi = (mkString: string): number => {
   return 4;
 };
 
-export const TARGET_KOMBINASI_SKS_KLK = [4, 7, 10, 13, 16] as const;
+export const TARGET_KOMBINASI_SKS_KLK = [4, 7, 10, 13, 16, 20] as const;
 
 export interface InfoMataKuliahKonversi {
   kode: string;
@@ -522,12 +522,12 @@ export const checkCanSelectMkKonversi = (
     };
   }
 
-  if (projectedTotalSks > 16) {
+  if (projectedTotalSks > 20) {
     return {
       canSelect: false,
       reason: 'exceed_16',
       projectedTotalSks,
-      message: `Tidak dapat memilih "${targetInfo.nama}" (${targetInfo.sks} SKS). Total beban SKS saat ini adalah ${currentTotalSks} SKS. Jika ditambahkan, totalnya menjadi ${projectedTotalSks} SKS (melebihi batas maksimal kombinasi 16 SKS). Pilihan mata kuliah konversi hanya boleh memenuhi target kombinasi 4, 7, 10, 13, atau 16 SKS.`
+      message: `Tidak dapat memilih "${targetInfo.nama}" (${targetInfo.sks} SKS). Total beban SKS saat ini adalah ${currentTotalSks} SKS. Jika ditambahkan, totalnya menjadi ${projectedTotalSks} SKS (melebihi batas maksimal kombinasi 20 SKS). Pilihan mata kuliah konversi hanya boleh memenuhi target kombinasi 4, 7, 10, 13, 16, atau 20 SKS.`
     };
   }
 
@@ -5591,7 +5591,7 @@ export const KlkView: React.FC<KlkViewProps> = ({
   }>({
     surat_lamaran: {
       id: 'surat_lamaran',
-      label: 'Surat Pengantar KLK',
+      label: 'Surat Lamaran KLK',
       description: 'Surat permohonan magang / kegiatan KLK resmi ke pimpinan instansi mitra',
       file: null,
       fileName: '',
@@ -8020,7 +8020,7 @@ ${instansiMitra}
     setModalSaveSuccess(false);
 
     setIsSksMenuOpen(false);
-    const validSksList = [3, 7, 10, 13, 16];
+    const validSksList = [3, 7, 10, 13, 16, 20];
     const initialSks = validSksList.includes(item.sksDiakui) ? item.sksDiakui : 7;
     setSelectedSksChoice(initialSks);
 
