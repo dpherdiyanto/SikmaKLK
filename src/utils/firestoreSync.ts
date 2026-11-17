@@ -1229,3 +1229,72 @@ export async function checkCollectionHasDocs(colName: string): Promise<boolean> 
     return false;
   }
 }
+
+export async function resolveOrCreateAuthUserFromEmailPassword(
+  firebaseUser: FirebaseUser,
+  matched: UserAccountItem
+): Promise<AuthUser> {
+  const uid = sanitizeDocId(matched.id || firebaseUser.uid, 'usr');
+  const email = clampStr(matched.email || firebaseUser.email || `${matched.username}@sikma.ub.ac.id`, 200).toLowerCase();
+  const isRootAdmin = isBootstrappedAdminEmail(email, firebaseUser.emailVerified) || matched.role === 'super_admin';
+
+  if (isRootAdmin) {
+    await ensureAdminRecordIfBootstrapped(firebaseUser);
+  }
+
+  const userDocRef = doc(db, 'users', uid);
+  const nowStr =
+    'Hari ini, ' +
+    new Date().toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit' }) +
+    ' WIB';
+
+  const resolvedRole: UserRole = isRootAdmin ? 'super_admin' : normalizeMahasiswaRole(matched.role, matched.unit);
+
+  try {
+    const snap = await getDoc(userDocRef);
+    if (!snap.exists()) {
+      await setDoc(userDocRef, {
+        id: uid,
+        ownerUid: uid,
+        username: clampStr(matched.username || email.split('@')[0], 100),
+        nama: clampStr(matched.nama || 'Pengguna SIKMA', 200),
+        role: resolvedRole,
+        identifier: clampStr(matched.identifier || '', 100),
+        email,
+        avatarText: clampStr(matched.avatarText || 'UB', 10),
+        unit: clampStr(matched.unit || 'Departemen Kimia FSTeM UB', 300),
+        jabatan: clampStr(matched.jabatan || '', 300),
+        status: 'Aktif',
+        noHp: clampStr(matched.noHp || '', 40),
+        terakhirLogin: clampStr(nowStr, 120),
+        mustChangePassword: Boolean(matched.mustChangePassword),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp()
+      });
+    } else {
+      await updateDoc(userDocRef, {
+        terakhirLogin: clampStr(nowStr, 120),
+        updatedAt: serverTimestamp()
+      });
+    }
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `users/${uid}`);
+  }
+
+  return {
+    id: uid,
+    username: clampStr(matched.username || email.split('@')[0], 100),
+    nama: clampStr(matched.nama || 'Pengguna SIKMA', 200),
+    role: resolvedRole,
+    identifier: clampStr(matched.identifier || '', 100),
+    email,
+    avatarText: clampStr(matched.avatarText || 'UB', 10),
+    unit: clampStr(matched.unit || 'Departemen Kimia FSTeM UB', 300),
+    jabatan: clampStr(matched.jabatan || '', 300),
+    lastLogin: 'Baru saja',
+    mustChangePassword: Boolean(matched.mustChangePassword),
+    isFirstLogin: false,
+    passwordChangedAt: matched.passwordChangedAt
+  };
+}
+

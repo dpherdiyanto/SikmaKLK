@@ -4,8 +4,8 @@ import { PREDEFINED_ACCOUNTS } from '../data/authUsers';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
 import { UbLogo } from './UbLogo';
 import { verifyPassword, isHashedPassword } from '../utils/passwordPolicy';
-import { auth, googleProvider, signInWithPopup } from '../firebase';
-import { resolveOrCreateAuthUserFromGoogle } from '../utils/firestoreSync';
+import { auth, googleProvider, signInWithPopup, signInWithEmailAndPassword, createUserWithEmailAndPassword } from '../firebase';
+import { resolveOrCreateAuthUserFromGoogle, resolveOrCreateAuthUserFromEmailPassword } from '../utils/firestoreSync';
 import {
   FlaskConical,
   User,
@@ -189,6 +189,30 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           );
           localStorage.setItem('sikma_user_accounts', JSON.stringify(updatedAccounts));
 
+          // Connect to Firebase Auth Email/Password for online Firestore synchronization
+          const authEmail = (matched.email && matched.email.includes('@'))
+            ? matched.email
+            : `${(matched.username || matched.id).toLowerCase().replace(/[^a-z0-9]/g, '')}@sikma.ub.ac.id`;
+          try {
+            let fbUser;
+            try {
+              const cred = await signInWithEmailAndPassword(auth, authEmail, inputPass);
+              fbUser = cred.user;
+            } catch (signinErr: any) {
+              if (signinErr?.code === 'auth/user-not-found' || signinErr?.code === 'auth/invalid-credential' || signinErr?.code === 'auth/wrong-password') {
+                const cred = await createUserWithEmailAndPassword(auth, authEmail, inputPass);
+                fbUser = cred.user;
+              } else {
+                throw signinErr;
+              }
+            }
+            if (fbUser) {
+              await resolveOrCreateAuthUserFromEmailPassword(fbUser, matched);
+            }
+          } catch (fbSyncErr) {
+            console.error('Firebase Auth/Firestore sync warning:', fbSyncErr);
+          }
+
           // Create AuthUser
           const authUser: AuthUser = {
             id: matched.id,
@@ -224,6 +248,29 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           if (inputPass !== predefinedMatch.passwordHint) {
             setErrorMessage('Kata sandi yang Anda masukkan salah. Silakan periksa kembali.');
             return;
+          }
+
+          const authEmail = (predefinedMatch.email && predefinedMatch.email.includes('@'))
+            ? predefinedMatch.email
+            : `${(predefinedMatch.username || predefinedMatch.id).toLowerCase().replace(/[^a-z0-9]/g, '')}@sikma.ub.ac.id`;
+          try {
+            let fbUser;
+            try {
+              const cred = await signInWithEmailAndPassword(auth, authEmail, inputPass);
+              fbUser = cred.user;
+            } catch (signinErr: any) {
+              if (signinErr?.code === 'auth/user-not-found' || signinErr?.code === 'auth/invalid-credential' || signinErr?.code === 'auth/wrong-password') {
+                const cred = await createUserWithEmailAndPassword(auth, authEmail, inputPass);
+                fbUser = cred.user;
+              } else {
+                throw signinErr;
+              }
+            }
+            if (fbUser) {
+              await resolveOrCreateAuthUserFromEmailPassword(fbUser, predefinedMatch as unknown as UserAccountItem);
+            }
+          } catch (fbSyncErr) {
+            console.error('Firebase Auth/Firestore sync warning:', fbSyncErr);
           }
 
           onLoginSuccess({
