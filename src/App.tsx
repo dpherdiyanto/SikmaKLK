@@ -2108,7 +2108,7 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
             &copy; 2026 <strong>Departemen Kimia FSTeM Universitas Brawijaya</strong>. Hak Cipta Dilindungi Undang-Undang.
           </div>
           <div className="flex items-center space-x-4 text-[11px] flex-wrap gap-y-1">
-            <span>SIKMA Kimia UB Portal</span>
+            <span>sikma Kimia UB</span>
             {currentRole === 'super_admin' && (
               <>
                 <span>&bull;</span>
