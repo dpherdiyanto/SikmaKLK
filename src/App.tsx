@@ -162,10 +162,13 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Authentication State (always start on Login Page; session persistence disabled)
+  // Authentication State (Session persistence enabled)
   const [currentUser, setCurrentUser] = useState<AuthUser | null>(() => {
     try {
-      localStorage.removeItem('sikma_auth_user');
+      const saved = localStorage.getItem('sikma_auth_user');
+      if (saved) {
+        return JSON.parse(saved);
+      }
     } catch {}
     return null;
   });
@@ -1493,6 +1496,7 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
 
     setCurrentUser(enrichedUser);
     try {
+      localStorage.setItem('sikma_auth_user', JSON.stringify(enrichedUser));
       sessionStorage.removeItem('sikma_klk_form_submitted_id');
       Object.keys(sessionStorage).forEach((storageKey) => {
         if (storageKey.startsWith('sikma_klk_active_subtab_')) {
