@@ -41,6 +41,9 @@ import {
   ChevronsRight
 } from 'lucide-react';
 import { UserRole, AuthUser, Dosen, Mahasiswa, AdminStaff, PLPStaff, PembimbingLapanganStaff, PengajuanKLK, LogbookLabItem, JadwalSeminar, SuratPengajuan, isMahasiswaRole, getUserRoleLabel, normalizeMahasiswaRole } from '../types/sikma';
+import { db } from '../firebase';
+import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { sanitizeDocId, clampStr } from '../utils/firestoreSync';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
 import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import {
@@ -717,7 +720,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     setTimeout(() => setCopiedToast(null), 3500);
   };
 
-  const handleSaveUser = (e: React.FormEvent) => {
+  const handleSaveUser = async (e: React.FormEvent) => {
     e.preventDefault();
     setModalError(null);
 
@@ -824,118 +827,170 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
         .toUpperCase();
     };
 
-    if (editingUser) {
-      const updated = userList.map((u) =>
-        u.id === editingUser.id
-          ? {
-              ...u,
-              ...formData,
-              username: finalUsername,
-              identifier: formattedIdentifier,
-              password: finalPassword ? finalPassword : u.password,
-              avatarText: getInitials(formData.nama)
-            }
-          : u
-      );
-      persistUserList(updated);
+    try {
+      if (editingUser) {
+        const docId = sanitizeDocId(editingUser.id, 'user');
+        const userDocRef = doc(db, 'users', docId);
 
-      // Sinkronisasi pembaruan ke seluruh modul: SDM, KLK, Logbook Lab, Jadwal Seminar, & Permohonan Surat
-      const savedUser = updated.find((u) => u.id === editingUser.id);
-      if (savedUser) {
-        const fullRes = syncUserEditAcrossAllModules(editingUser, savedUser, {
+        const updatedPayload = {
+          id: docId,
+          username: clampStr(finalUsername, 100),
+          nama: clampStr(formData.nama, 200),
+          role: normalizeMahasiswaRole(formData.role, formData.unit),
+          identifier: clampStr(formattedIdentifier, 100),
+          email: clampStr(formData.email, 200),
+          avatarText: clampStr(getInitials(formData.nama), 10),
+          unit: clampStr(formData.unit, 300),
+          jabatan: clampStr(formData.jabatan, 300),
+          status: formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
+          noHp: clampStr(formData.noHp, 40),
+          terakhirLogin: clampStr(editingUser.terakhirLogin || 'Belum pernah login', 120),
+          mustChangePassword: Boolean(editingUser.mustChangePassword),
+          updatedAt: serverTimestamp()
+        };
+
+        await updateDoc(userDocRef, updatedPayload);
+
+        const updated = userList.map((u) =>
+          u.id === editingUser.id
+            ? {
+                ...u,
+                ...formData,
+                username: finalUsername,
+                identifier: formattedIdentifier,
+                password: finalPassword ? finalPassword : u.password,
+                avatarText: getInitials(formData.nama)
+              }
+            : u
+        );
+        persistUserList(updated);
+
+        // Sinkronisasi pembaruan ke seluruh modul: SDM, KLK, Logbook Lab, Jadwal Seminar, & Permohonan Surat
+        const savedUser = updated.find((u) => u.id === editingUser.id);
+        if (savedUser) {
+          const fullRes = syncUserEditAcrossAllModules(editingUser, savedUser, {
+            dosenList,
+            mahasiswaList,
+            adminList,
+            plpList,
+            pembimbingLapanganList,
+            klkList,
+            logbooks,
+            seminarList,
+            suratList
+          });
+
+          const nextPb = fullRes.newPembimbingLapanganList || pembimbingLapanganList;
+
+          if (onSyncAllModules) {
+            onSyncAllModules(
+              fullRes.newDosenList,
+              fullRes.newMahasiswaList,
+              fullRes.newAdminList,
+              fullRes.newPlpList,
+              fullRes.newKlkList,
+              updated,
+              nextPb,
+              fullRes.newLogbooks,
+              fullRes.newSeminarList,
+              fullRes.newSuratList
+            );
+          } else {
+            if (onUpdateDosenList) onUpdateDosenList(fullRes.newDosenList);
+            if (onUpdateMahasiswaList) onUpdateMahasiswaList(fullRes.newMahasiswaList);
+            if (onUpdateAdminList) onUpdateAdminList(fullRes.newAdminList);
+            if (onUpdatePlpList) onUpdatePlpList(fullRes.newPlpList);
+            if (fullRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(fullRes.newPembimbingLapanganList);
+            if (onUpdateUserList) onUpdateUserList(updated);
+          }
+        }
+        setEditingUser(null);
+        setSyncNotice(`Data akun "${formData.nama}" berhasil diperbarui & disimpan langsung ke server Firestore.`);
+        setTimeout(() => setSyncNotice(null), 5000);
+      } else {
+        const newId = `usr-${Date.now().toString().slice(-4)}`;
+        const docId = sanitizeDocId(newId, 'user');
+        const userDocRef = doc(db, 'users', docId);
+
+        const newPayload = {
+          id: docId,
+          ownerUid: docId,
+          username: clampStr(finalUsername, 100),
+          nama: clampStr(formData.nama, 200),
+          role: normalizeMahasiswaRole(formData.role, formData.unit),
+          identifier: clampStr(formattedIdentifier, 100),
+          email: clampStr(formData.email, 200),
+          avatarText: clampStr(getInitials(formData.nama), 10),
+          unit: clampStr(formData.unit, 300),
+          jabatan: clampStr(formData.jabatan, 300),
+          status: formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
+          noHp: clampStr(formData.noHp, 40),
+          terakhirLogin: 'Belum pernah login',
+          mustChangePassword: true,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        };
+
+        await setDoc(userDocRef, newPayload);
+
+        const newUser: UserAccountItem = {
+          id: docId,
+          ...formData,
+          username: finalUsername,
+          identifier: formattedIdentifier,
+          password: finalPassword,
+          avatarText: getInitials(formData.nama),
+          tanggalDibuat: new Date().toISOString().split('T')[0],
+          terakhirLogin: 'Belum pernah login',
+          mustChangePassword: true
+        };
+        const updated = [newUser, ...userList];
+        persistUserList(updated);
+        setIsAddModalOpen(false);
+
+        // Sinkronisasi penambahan akun baru ke modul Sumber Daya Manusia & seluruh modul
+        const sdmRes = syncUserAccountToSdm(newUser, {
           dosenList,
           mahasiswaList,
           adminList,
           plpList,
-          pembimbingLapanganList,
-          klkList,
-          logbooks,
-          seminarList,
-          suratList
+          pembimbingLapanganList
         });
 
-        const nextPb = fullRes.newPembimbingLapanganList || pembimbingLapanganList;
+        const nextDosen = sdmRes.newDosenList || dosenList;
+        const nextMahasiswa = sdmRes.newMahasiswaList || mahasiswaList;
+        const nextAdmin = sdmRes.newAdminList || adminList;
+        const nextPlp = sdmRes.newPlpList || plpList;
+        const nextPb = sdmRes.newPembimbingLapanganList || pembimbingLapanganList;
 
         if (onSyncAllModules) {
           onSyncAllModules(
-            fullRes.newDosenList,
-            fullRes.newMahasiswaList,
-            fullRes.newAdminList,
-            fullRes.newPlpList,
-            fullRes.newKlkList,
+            nextDosen,
+            nextMahasiswa,
+            nextAdmin,
+            nextPlp,
+            klkList,
             updated,
             nextPb,
-            fullRes.newLogbooks,
-            fullRes.newSeminarList,
-            fullRes.newSuratList
+            logbooks,
+            seminarList,
+            suratList
           );
         } else {
-          if (onUpdateDosenList) onUpdateDosenList(fullRes.newDosenList);
-          if (onUpdateMahasiswaList) onUpdateMahasiswaList(fullRes.newMahasiswaList);
-          if (onUpdateAdminList) onUpdateAdminList(fullRes.newAdminList);
-          if (onUpdatePlpList) onUpdatePlpList(fullRes.newPlpList);
-          if (fullRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(fullRes.newPembimbingLapanganList);
+          if (sdmRes.newDosenList && onUpdateDosenList) onUpdateDosenList(nextDosen);
+          if (sdmRes.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(nextMahasiswa);
+          if (sdmRes.newAdminList && onUpdateAdminList) onUpdateAdminList(nextAdmin);
+          if (sdmRes.newPlpList && onUpdatePlpList) onUpdatePlpList(nextPlp);
+          if (sdmRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(nextPb);
           if (onUpdateUserList) onUpdateUserList(updated);
         }
+
+        setSyncNotice(`Akun baru "${newUser.nama}" (${newUser.role.toUpperCase()}) berhasil ditambahkan & disimpan ke server Firestore.`);
+        setTimeout(() => setSyncNotice(null), 5000);
       }
-      setEditingUser(null);
-      setSyncNotice(`Data akun "${formData.nama}" berhasil disimpan & disinkronkan ke seluruh modul sistem.`);
-      setTimeout(() => setSyncNotice(null), 5000);
-    } else {
-      const newUser: UserAccountItem = {
-        id: `usr-${Date.now().toString().slice(-4)}`,
-        ...formData,
-        username: finalUsername,
-        identifier: formattedIdentifier,
-        password: finalPassword,
-        avatarText: getInitials(formData.nama),
-        tanggalDibuat: new Date().toISOString().split('T')[0],
-        terakhirLogin: 'Belum pernah login',
-        mustChangePassword: true
-      };
-      const updated = [newUser, ...userList];
-      persistUserList(updated);
-      setIsAddModalOpen(false);
-
-      // Sinkronisasi penambahan akun baru ke modul Sumber Daya Manusia & seluruh modul
-      const sdmRes = syncUserAccountToSdm(newUser, {
-        dosenList,
-        mahasiswaList,
-        adminList,
-        plpList,
-        pembimbingLapanganList
-      });
-
-      const nextDosen = sdmRes.newDosenList || dosenList;
-      const nextMahasiswa = sdmRes.newMahasiswaList || mahasiswaList;
-      const nextAdmin = sdmRes.newAdminList || adminList;
-      const nextPlp = sdmRes.newPlpList || plpList;
-      const nextPb = sdmRes.newPembimbingLapanganList || pembimbingLapanganList;
-
-      if (onSyncAllModules) {
-        onSyncAllModules(
-          nextDosen,
-          nextMahasiswa,
-          nextAdmin,
-          nextPlp,
-          klkList,
-          updated,
-          nextPb,
-          logbooks,
-          seminarList,
-          suratList
-        );
-      } else {
-        if (sdmRes.newDosenList && onUpdateDosenList) onUpdateDosenList(nextDosen);
-        if (sdmRes.newMahasiswaList && onUpdateMahasiswaList) onUpdateMahasiswaList(nextMahasiswa);
-        if (sdmRes.newAdminList && onUpdateAdminList) onUpdateAdminList(nextAdmin);
-        if (sdmRes.newPlpList && onUpdatePlpList) onUpdatePlpList(nextPlp);
-        if (sdmRes.newPembimbingLapanganList && onUpdatePembimbingLapanganList) onUpdatePembimbingLapanganList(nextPb);
-        if (onUpdateUserList) onUpdateUserList(updated);
-      }
-
-      setSyncNotice(`Akun baru "${newUser.nama}" (${newUser.role.toUpperCase()}) berhasil ditambahkan & otomatis terdaftar di SDM.`);
-      setTimeout(() => setSyncNotice(null), 5000);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setModalError(`Gagal menyimpan ke Firestore: ${errMsg}`);
     }
   };
 
@@ -965,12 +1020,24 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     }
   };
 
-  const handleConfirmDeleteUser = () => {
+  const handleConfirmDeleteUser = async () => {
     if (!userToDelete) return;
     if (userToDelete.role === 'super_admin' && (currentRole !== 'super_admin' || superAdminTotal <= 1)) {
       setUserToDelete(null);
       return;
     }
+
+    try {
+      const docId = sanitizeDocId(userToDelete.id, 'user');
+      await deleteDoc(doc(db, 'users', docId));
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSyncNotice(`Error Firestore (Gagal Hapus User): ${errMsg}`);
+      setTimeout(() => setSyncNotice(null), 6000);
+      setUserToDelete(null);
+      return;
+    }
+
     const updated = userList.filter((u) => u.id !== userToDelete.id);
     persistUserList(updated);
 
@@ -1021,12 +1088,12 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       }
     }
 
-    setSyncNotice(`Pengguna "${userToDelete.nama}" (@${userToDelete.username}) berhasil dihapus dan dibersihkan dari seluruh modul sistem.`);
-    setTimeout(() => setSyncNotice(null), 4000);
+    setSyncNotice(`Pengguna "${userToDelete.nama}" (@${userToDelete.username}) berhasil dihapus dari server Firestore & dibersihkan dari seluruh modul.`);
+    setTimeout(() => setSyncNotice(null), 5000);
     setUserToDelete(null);
   };
 
-  const handleConfirmBulkDeleteUsers = () => {
+  const handleConfirmBulkDeleteUsers = async () => {
     if (!canBulkDelete || selectedIds.length === 0) return;
 
     const targetUsers = userList.filter(
@@ -1043,6 +1110,19 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     if (updatedUsers.length < 1) {
       setSyncNotice('Peringatan: Tidak dapat menghapus seluruh akun karena sistem harus menyisakan minimal 1 pengguna.');
       setTimeout(() => setSyncNotice(null), 4000);
+      setBulkDeleteConfirmOpen(false);
+      return;
+    }
+
+    try {
+      for (const delUser of targetUsers) {
+        const docId = sanitizeDocId(delUser.id, 'user');
+        await deleteDoc(doc(db, 'users', docId));
+      }
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setSyncNotice(`Error Firestore (Gagal Bulk Delete): ${errMsg}`);
+      setTimeout(() => setSyncNotice(null), 6000);
       setBulkDeleteConfirmOpen(false);
       return;
     }
@@ -1100,20 +1180,37 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
     setSelectedIds([]);
     setBulkDeleteConfirmOpen(false);
-    setSyncNotice(`${targetUsers.length} akun pengguna terpilih berhasil dihapus dan dibersihkan dari seluruh modul sistem.`);
+    setSyncNotice(`${targetUsers.length} akun pengguna terpilih berhasil dihapus dari server Firestore & dibersihkan dari seluruh modul.`);
     setTimeout(() => setSyncNotice(null), 5000);
   };
 
-  const handleToggleStatus = (id: string) => {
+  const handleToggleStatus = async (id: string) => {
     let targetUser: UserAccountItem | undefined;
+    let nextStatus: 'Aktif' | 'Nonaktif' = 'Aktif';
     const updated = userList.map((u) => {
       if (u.id === id) {
-        const nextStatus = u.status === 'Aktif' ? 'Nonaktif' : 'Aktif';
-        targetUser = { ...u, status: nextStatus as 'Aktif' | 'Nonaktif' };
+        nextStatus = u.status === 'Aktif' ? 'Nonaktif' : 'Aktif';
+        targetUser = { ...u, status: nextStatus };
         return targetUser;
       }
       return u;
     });
+
+    if (targetUser) {
+      try {
+        const docId = sanitizeDocId(targetUser.id, 'user');
+        await updateDoc(doc(db, 'users', docId), {
+          status: nextStatus,
+          updatedAt: serverTimestamp()
+        });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        setSyncNotice(`Error Firestore (Gagal Ubah Status): ${errMsg}`);
+        setTimeout(() => setSyncNotice(null), 6000);
+        return;
+      }
+    }
+
     persistUserList(updated);
 
     if (targetUser) {
@@ -1154,7 +1251,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     }
   };
 
-  const handleResetPasswordConfirm = (e: React.FormEvent) => {
+  const handleResetPasswordConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
     setResetPassError(null);
     const pwdValError = getPasswordValidationMessage(newPassword.trim());
@@ -1163,6 +1260,19 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       return;
     }
     if (resetPassUser) {
+      try {
+        const docId = sanitizeDocId(resetPassUser.id, 'user');
+        await updateDoc(doc(db, 'users', docId), {
+          password: newPassword.trim(),
+          mustChangePassword: true,
+          updatedAt: serverTimestamp()
+        });
+      } catch (err: unknown) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        setResetPassError(`Error Firestore (Gagal Reset Password): ${errMsg}`);
+        return;
+      }
+
       const updated = userList.map((u) =>
         u.id === resetPassUser.id
           ? { ...u, password: newPassword.trim(), mustChangePassword: true, passwordChangedAt: undefined }
@@ -1171,7 +1281,7 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       persistUserList(updated);
       if (onUpdateUserList) onUpdateUserList(updated);
     }
-    setShowPassAlert(`Kata sandi untuk akun "${resetPassUser?.username}" berhasil diatur ulang menjadi: "${newPassword.trim()}"`);
+    setShowPassAlert(`Kata sandi untuk akun "${resetPassUser?.username}" berhasil diatur ulang & diperbarui di server Firestore.`);
     setResetPassUser(null);
     setNewPassword('');
     setTimeout(() => setShowPassAlert(null), 6000);
