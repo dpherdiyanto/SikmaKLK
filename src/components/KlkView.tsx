@@ -17422,12 +17422,12 @@ ${instansiMitra}
                     <span className="text-red-500">*</span>
                   </label>
                   <p className="text-[11px] text-slate-500 mt-0.5">
-                    Mahasiswa dapat memilih <strong>1 atau lebih dari 1 usulan mata kuliah konversi</strong>. Total akumulasi beban SKS harus memenuhi salah satu kombinasi: <strong>4, 7, 10, 13, atau 16 SKS</strong>.
+                    Mahasiswa dapat memilih <strong>1 atau lebih dari 1 usulan mata kuliah konversi</strong>. Total akumulasi beban SKS harus memenuhi salah satu kombinasi: <strong>4, 7, 10, 13, 16, 20 SKS</strong>.
                   </p>
                 </div>
                 <div className="shrink-0 flex items-center gap-2">
                   <span className="text-[10px] font-bold px-2 py-1 rounded bg-[#002B49]/10 text-[#002B49] border border-[#002B49]/20">
-                    Kombinasi 4, 7, 10, 13, 16 SKS
+                    Kombinasi 4, 7, 10, 13, 16, 20 SKS
                   </span>
                 </div>
               </div>
