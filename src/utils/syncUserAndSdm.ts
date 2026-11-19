@@ -844,7 +844,8 @@ export const syncBidirectionalUsersAndSdm = (
   currentMahasiswa: Mahasiswa[],
   currentAdmin: AdminStaff[],
   currentPlp: PLPStaff[],
-  currentPembimbingLapangan: PembimbingLapanganStaff[] = []
+  currentPembimbingLapangan: PembimbingLapanganStaff[] = [],
+  options?: { skipReverseUserCreation?: boolean }
 ): {
   syncedUsers: UserAccountItem[];
   syncedDosen: Dosen[];
@@ -1047,7 +1048,18 @@ export const syncBidirectionalUsersAndSdm = (
     }
   });
 
-  // 2. Sinkronisasikan SDM kembali ke User Accounts agar data akun terisi lengkap
+  // 2. Sinkronisasikan SDM kembali ke User Accounts agar data akun terisi lengkap (kecuali saat menghapus user)
+  if (options?.skipReverseUserCreation) {
+    return {
+      syncedUsers: currentUsers,
+      syncedDosen: updatedDosen,
+      syncedMahasiswa: updatedMahasiswa,
+      syncedAdmin: updatedAdmin,
+      syncedPlp: updatedPlp,
+      syncedPembimbingLapangan: updatedPembimbingLapangan
+    };
+  }
+
   const syncRes = syncSdmToUserAccounts(currentUsers, updatedDosen, updatedMahasiswa, updatedAdmin, updatedPlp, updatedPembimbingLapangan);
 
   return {
@@ -1952,21 +1964,31 @@ export const syncUserDeleteAcrossAllModules = (
   // 3. PEMBERSIHAN DATA ADMIN & PLP
   if (deletedUser.role === 'admin' || deletedUser.role === 'super_admin' || matchedAdminList.length > 0) {
     const adminIdsToRemove = new Set(matchedAdminList.map((a) => a.id));
-    if (deletedUser.role === 'admin' || deletedUser.role === 'super_admin') {
-      updatedAdmin.forEach((a) => {
-        if (isUserMatchingEntity(deletedUser, a)) adminIdsToRemove.add(a.id);
-      });
-    }
+    updatedAdmin.forEach((a) => {
+      if (
+        isUserMatchingEntity(deletedUser, a) ||
+        (cleanId && isIdentifierMatch(a.nip, cleanId)) ||
+        isNameMatch(a.nama, deletedUser.nama) ||
+        (deletedUser.username && isNameMatch(a.nama, deletedUser.username))
+      ) {
+        adminIdsToRemove.add(a.id);
+      }
+    });
     updatedAdmin = updatedAdmin.filter((a) => !adminIdsToRemove.has(a.id));
   }
 
   if (deletedUser.role === 'admin' || deletedUser.role === 'super_admin' || matchedPlpList.length > 0) {
     const plpIdsToRemove = new Set(matchedPlpList.map((p) => p.id));
-    if (deletedUser.role === 'admin' || deletedUser.role === 'super_admin') {
-      updatedPlp.forEach((p) => {
-        if (isUserMatchingEntity(deletedUser, p)) plpIdsToRemove.add(p.id);
-      });
-    }
+    updatedPlp.forEach((p) => {
+      if (
+        isUserMatchingEntity(deletedUser, p) ||
+        (cleanId && isIdentifierMatch(p.nip, cleanId)) ||
+        isNameMatch(p.nama, deletedUser.nama) ||
+        (deletedUser.username && isNameMatch(p.nama, deletedUser.username))
+      ) {
+        plpIdsToRemove.add(p.id);
+      }
+    });
     updatedPlp = updatedPlp.filter((p) => !plpIdsToRemove.has(p.id));
   }
 

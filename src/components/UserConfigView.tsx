@@ -41,9 +41,9 @@ import {
   ChevronsRight
 } from 'lucide-react';
 import { UserRole, AuthUser, Dosen, Mahasiswa, AdminStaff, PLPStaff, PembimbingLapanganStaff, PengajuanKLK, LogbookLabItem, JadwalSeminar, SuratPengajuan, isMahasiswaRole, getUserRoleLabel, normalizeMahasiswaRole } from '../types/sikma';
-import { db } from '../firebase';
-import { doc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
-import { sanitizeDocId, clampStr } from '../utils/firestoreSync';
+import { auth, db } from '../firebase';
+import { doc, getDoc, setDoc, updateDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { sanitizeDocId, clampStr, syncAdminRegistryForUser, removeAdminRegistryByEmail } from '../utils/firestoreSync';
 import { UserAccountItem, INITIAL_USER_ACCOUNTS, NIM_NIP_MIGRATION_FLAG, migrateUsernamesToNimNip } from '../data/userList';
 import { INITIAL_SEMESTER_LIST } from '../data/semesterList';
 import {
@@ -188,6 +188,8 @@ interface UserConfigViewProps {
   logbooks?: LogbookLabItem[];
   seminarList?: JadwalSeminar[];
   suratList?: SuratPengajuan[];
+  onBeforeDeleteUserIds?: (ids: string[]) => void;
+  onBeforeUpsertUserId?: (id: string) => void;
   onSyncAllModules?: (
     dList?: Dosen[],
     mList?: Mahasiswa[],
@@ -198,7 +200,8 @@ interface UserConfigViewProps {
     pbList?: PembimbingLapanganStaff[],
     logList?: LogbookLabItem[],
     semList?: JadwalSeminar[],
-    surList?: SuratPengajuan[]
+    surList?: SuratPengajuan[],
+    options?: { skipReverseSdmUserCreation?: boolean }
   ) => void;
   onUpdateDosenList?: (newDosen: Dosen[]) => void;
   onUpdateMahasiswaList?: (newMhs: Mahasiswa[]) => void;
@@ -222,6 +225,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   logbooks = [],
   seminarList = [],
   suratList = [],
+  onBeforeDeleteUserIds,
+  onBeforeUpsertUserId,
   onSyncAllModules,
   onUpdateDosenList,
   onUpdateMahasiswaList,
@@ -444,7 +449,14 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   const [copiedToast, setCopiedToast] = useState<string | null>(null);
   const [modalError, setModalError] = useState<string | null>(null);
   const [resetPassError, setResetPassError] = useState<string | null>(null);
-  const canBulkDelete = currentRole === 'super_admin' || currentRole === 'admin';
+  const isSuperAdminRole = (role?: string) => {
+    const raw = String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+    return raw === 'super_admin' || raw === 'superadmin';
+  };
+
+  const [deleteModalError, setDeleteModalError] = useState<string | null>(null);
+  const [isDeletingUser, setIsDeletingUser] = useState<boolean>(false);
+  const canBulkDelete = isSuperAdminRole(currentRole) || currentRole === 'admin';
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [bulkDeleteConfirmOpen, setBulkDeleteConfirmOpen] = useState(false);
 
@@ -547,13 +559,15 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   const paginatedUsers = filteredUsers.slice(startIndex, endIndex);
 
   const superAdminTotal = useMemo(
-    () => userList.filter((u) => u.role === 'super_admin').length,
+    () => userList.filter((u) => isSuperAdminRole(u.role)).length,
     [userList]
   );
 
   const isUserDeleteProtected = (u: UserAccountItem) => {
-    if (currentUser?.username === u.username) return true;
-    if (u.role === 'super_admin' && (currentRole !== 'super_admin' || superAdminTotal <= 1)) return true;
+    const curU = (currentUser?.username || '').trim().toLowerCase();
+    const targetU = (u.username || '').trim().toLowerCase();
+    if (curU && targetU && curU === targetU) return true;
+    if (isSuperAdminRole(u.role) && (!isSuperAdminRole(currentRole) || superAdminTotal <= 1)) return true;
     return false;
   };
 
@@ -828,28 +842,54 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     };
 
     try {
+      if (!auth.currentUser) {
+        setModalError('Sesi Firebase Auth belum aktif. Silakan Logout lalu Login kembali agar perubahan tersimpan ke server Firestore.');
+        return;
+      }
+
       if (editingUser) {
         const docId = sanitizeDocId(editingUser.id, 'user');
         const userDocRef = doc(db, 'users', docId);
+        const normalizedRole = normalizeMahasiswaRole(formData.role, formData.unit);
+        const normalizedStatus = formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif';
 
         const updatedPayload = {
           id: docId,
           username: clampStr(finalUsername, 100),
           nama: clampStr(formData.nama, 200),
-          role: normalizeMahasiswaRole(formData.role, formData.unit),
+          role: normalizedRole,
           identifier: clampStr(formattedIdentifier, 100),
           email: clampStr(formData.email, 200),
           avatarText: clampStr(getInitials(formData.nama), 10),
           unit: clampStr(formData.unit, 300),
           jabatan: clampStr(formData.jabatan, 300),
-          status: formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
+          status: normalizedStatus,
           noHp: clampStr(formData.noHp, 40),
           terakhirLogin: clampStr(editingUser.terakhirLogin || 'Belum pernah login', 120),
           mustChangePassword: Boolean(editingUser.mustChangePassword),
           updatedAt: serverTimestamp()
         };
 
-        await updateDoc(userDocRef, updatedPayload);
+        const existingSnap = await getDoc(userDocRef);
+        if (existingSnap.exists()) {
+          await updateDoc(userDocRef, updatedPayload);
+        } else {
+          await setDoc(userDocRef, {
+            ...updatedPayload,
+            ownerUid: docId,
+            createdAt: serverTimestamp()
+          });
+        }
+
+        if (editingUser.email && editingUser.email.toLowerCase() !== formData.email.trim().toLowerCase()) {
+          await removeAdminRegistryByEmail(editingUser.email);
+        }
+        await syncAdminRegistryForUser({
+          email: formData.email,
+          nama: formData.nama,
+          role: normalizedRole,
+          status: normalizedStatus
+        });
 
         const updated = userList.map((u) =>
           u.id === editingUser.id
@@ -893,7 +933,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
               nextPb,
               fullRes.newLogbooks,
               fullRes.newSeminarList,
-              fullRes.newSuratList
+              fullRes.newSuratList,
+              { skipReverseSdmUserCreation: true }
             );
           } else {
             if (onUpdateDosenList) onUpdateDosenList(fullRes.newDosenList);
@@ -908,22 +949,25 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
         setSyncNotice(`Data akun "${formData.nama}" berhasil diperbarui & disimpan langsung ke server Firestore.`);
         setTimeout(() => setSyncNotice(null), 5000);
       } else {
-        const newId = `usr-${Date.now().toString().slice(-4)}`;
+        const newId = `usr-${Date.now()}`;
         const docId = sanitizeDocId(newId, 'user');
+        onBeforeUpsertUserId?.(docId);
         const userDocRef = doc(db, 'users', docId);
+        const normalizedRole = normalizeMahasiswaRole(formData.role, formData.unit);
+        const normalizedStatus = formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif';
 
         const newPayload = {
           id: docId,
           ownerUid: docId,
           username: clampStr(finalUsername, 100),
           nama: clampStr(formData.nama, 200),
-          role: normalizeMahasiswaRole(formData.role, formData.unit),
+          role: normalizedRole,
           identifier: clampStr(formattedIdentifier, 100),
           email: clampStr(formData.email, 200),
           avatarText: clampStr(getInitials(formData.nama), 10),
           unit: clampStr(formData.unit, 300),
           jabatan: clampStr(formData.jabatan, 300),
-          status: formData.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
+          status: normalizedStatus,
           noHp: clampStr(formData.noHp, 40),
           terakhirLogin: 'Belum pernah login',
           mustChangePassword: true,
@@ -932,6 +976,12 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
         };
 
         await setDoc(userDocRef, newPayload);
+        await syncAdminRegistryForUser({
+          email: formData.email,
+          nama: formData.nama,
+          role: normalizedRole,
+          status: normalizedStatus
+        });
 
         const newUser: UserAccountItem = {
           id: docId,
@@ -995,17 +1045,18 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
   };
 
   const handleRequestDeleteUser = (user: UserAccountItem) => {
+    setDeleteModalError(null);
     if (userList.length <= 1) {
       setSyncNotice('Peringatan: Tidak dapat menghapus satu-satunya user sistem.');
       setTimeout(() => setSyncNotice(null), 4000);
       return;
     }
-    if (user.role === 'super_admin' && currentRole !== 'super_admin') {
+    if (isSuperAdminRole(user.role) && !isSuperAdminRole(currentRole)) {
       setSyncNotice('Akses Ditolak: Hanya Super Admin yang dapat menghapus akun tingkat Super Admin.');
       setTimeout(() => setSyncNotice(null), 4000);
       return;
     }
-    if (user.role === 'super_admin' && superAdminTotal <= 1) {
+    if (isSuperAdminRole(user.role) && superAdminTotal <= 1) {
       setSyncNotice('Peringatan: Sistem harus memiliki minimal 1 akun Super Admin yang terdaftar.');
       setTimeout(() => setSyncNotice(null), 4000);
       return;
@@ -1022,21 +1073,46 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
   const handleConfirmDeleteUser = async () => {
     if (!userToDelete) return;
-    if (userToDelete.role === 'super_admin' && (currentRole !== 'super_admin' || superAdminTotal <= 1)) {
-      setUserToDelete(null);
+    setDeleteModalError(null);
+
+    const curU = (currentUser?.username || '').trim().toLowerCase();
+    const targetU = (userToDelete.username || '').trim().toLowerCase();
+    if (curU && targetU && curU === targetU) {
+      setDeleteModalError('Tidak dapat menghapus akun yang sedang Anda gunakan untuk login.');
       return;
     }
 
-    try {
-      const docId = sanitizeDocId(userToDelete.id, 'user');
-      await deleteDoc(doc(db, 'users', docId));
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      setSyncNotice(`Error Firestore (Gagal Hapus User): ${errMsg}`);
-      setTimeout(() => setSyncNotice(null), 6000);
-      setUserToDelete(null);
+    if (isSuperAdminRole(userToDelete.role) && (!isSuperAdminRole(currentRole) || superAdminTotal <= 1)) {
+      setDeleteModalError('Minimal 1 akun Super Admin harus dipertahankan dalam sistem.');
       return;
     }
+
+    if (!auth.currentUser) {
+      setDeleteModalError(
+        'Sesi Firebase Auth belum aktif di browser ini. Silakan Logout lalu Login kembali sebagai Super Admin agar penghapusan tersinkron ke server Firestore.'
+      );
+      return;
+    }
+
+    setIsDeletingUser(true);
+    const docId = sanitizeDocId(userToDelete.id, 'user');
+    onBeforeDeleteUserIds?.([docId]);
+    try {
+      const shouldCleanAdminReg =
+        isSuperAdminRole(userToDelete.role) || userToDelete.role === 'admin';
+      await Promise.all([
+        deleteDoc(doc(db, 'users', docId)),
+        shouldCleanAdminReg ? removeAdminRegistryByEmail(userToDelete.email) : Promise.resolve()
+      ]);
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setDeleteModalError(`Error Firestore (Gagal Hapus User): ${errMsg}`);
+      setSyncNotice(`Error Firestore (Gagal Hapus User): ${errMsg}`);
+      setTimeout(() => setSyncNotice(null), 6000);
+      setIsDeletingUser(false);
+      return;
+    }
+    setIsDeletingUser(false);
 
     const updated = userList.filter((u) => u.id !== userToDelete.id);
     persistUserList(updated);
@@ -1067,7 +1143,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
         nextPb,
         fullDel.newLogbooks,
         fullDel.newSeminarList,
-        fullDel.newSuratList
+        fullDel.newSuratList,
+        { skipReverseSdmUserCreation: true }
       );
     } else {
       if (onUpdateDosenList) onUpdateDosenList(fullDel.newDosenList);
@@ -1114,18 +1191,37 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
       return;
     }
 
-    try {
-      for (const delUser of targetUsers) {
-        const docId = sanitizeDocId(delUser.id, 'user');
-        await deleteDoc(doc(db, 'users', docId));
-      }
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      setSyncNotice(`Error Firestore (Gagal Bulk Delete): ${errMsg}`);
-      setTimeout(() => setSyncNotice(null), 6000);
-      setBulkDeleteConfirmOpen(false);
+    setDeleteModalError(null);
+    if (!auth.currentUser) {
+      setDeleteModalError(
+        'Sesi Firebase Auth belum aktif di browser ini. Silakan Logout lalu Login kembali sebagai Super Admin agar penghapusan tersinkron ke server Firestore.'
+      );
       return;
     }
+
+    setIsDeletingUser(true);
+    const docIds = targetUsers.map((u) => sanitizeDocId(u.id, 'user'));
+    onBeforeDeleteUserIds?.(docIds);
+    try {
+      await Promise.all(
+        targetUsers.map((delUser) => {
+          const docId = sanitizeDocId(delUser.id, 'user');
+          const shouldCleanAdminReg = isSuperAdminRole(delUser.role) || delUser.role === 'admin';
+          return Promise.all([
+            deleteDoc(doc(db, 'users', docId)),
+            shouldCleanAdminReg ? removeAdminRegistryByEmail(delUser.email) : Promise.resolve()
+          ]);
+        })
+      );
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      setDeleteModalError(`Error Firestore (Gagal Bulk Delete): ${errMsg}`);
+      setSyncNotice(`Error Firestore (Gagal Bulk Delete): ${errMsg}`);
+      setTimeout(() => setSyncNotice(null), 6000);
+      setIsDeletingUser(false);
+      return;
+    }
+    setIsDeletingUser(false);
 
     persistUserList(updatedUsers);
 
@@ -1167,7 +1263,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
         moduleState.pembimbingLapanganList,
         moduleState.logbooks,
         moduleState.seminarList,
-        moduleState.suratList
+        moduleState.suratList,
+        { skipReverseSdmUserCreation: true }
       );
     } else {
       if (onUpdateDosenList) onUpdateDosenList(moduleState.dosenList);
@@ -1198,10 +1295,44 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
 
     if (targetUser) {
       try {
+        if (!auth.currentUser) {
+          setSyncNotice('Sesi Firebase Auth belum aktif. Silakan Logout lalu Login ulang agar status tersimpan ke Firestore.');
+          setTimeout(() => setSyncNotice(null), 6000);
+          return;
+        }
         const docId = sanitizeDocId(targetUser.id, 'user');
-        await updateDoc(doc(db, 'users', docId), {
-          status: nextStatus,
-          updatedAt: serverTimestamp()
+        const userRef = doc(db, 'users', docId);
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          await updateDoc(userRef, {
+            status: nextStatus,
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          await setDoc(userRef, {
+            id: docId,
+            ownerUid: docId,
+            username: clampStr(targetUser.username || docId, 100),
+            nama: clampStr(targetUser.nama || 'Pengguna', 200),
+            role: normalizeMahasiswaRole(targetUser.role, targetUser.unit),
+            identifier: clampStr(targetUser.identifier || '', 100),
+            email: clampStr(targetUser.email || '', 200),
+            avatarText: clampStr(targetUser.avatarText || 'UB', 10),
+            unit: clampStr(targetUser.unit || '', 300),
+            jabatan: clampStr(targetUser.jabatan || '', 300),
+            status: nextStatus,
+            noHp: clampStr(targetUser.noHp || '', 40),
+            terakhirLogin: clampStr(targetUser.terakhirLogin || 'Belum pernah login', 120),
+            mustChangePassword: Boolean(targetUser.mustChangePassword),
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }
+        await syncAdminRegistryForUser({
+          email: targetUser.email,
+          nama: targetUser.nama,
+          role: targetUser.role,
+          status: nextStatus
         });
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
@@ -1238,7 +1369,8 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
           nextPb,
           logbooks,
           seminarList,
-          suratList
+          suratList,
+          { skipReverseSdmUserCreation: true }
         );
       } else {
         if (sdmStat.newDosenList && onUpdateDosenList) onUpdateDosenList(nextDosen);
@@ -1261,12 +1393,38 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
     }
     if (resetPassUser) {
       try {
+        if (!auth.currentUser) {
+          setResetPassError('Sesi Firebase Auth belum aktif. Silakan Logout lalu Login kembali.');
+          return;
+        }
         const docId = sanitizeDocId(resetPassUser.id, 'user');
-        await updateDoc(doc(db, 'users', docId), {
-          password: newPassword.trim(),
-          mustChangePassword: true,
-          updatedAt: serverTimestamp()
-        });
+        const userRef = doc(db, 'users', docId);
+        const snap = await getDoc(userRef);
+        if (snap.exists()) {
+          await updateDoc(userRef, {
+            mustChangePassword: true,
+            updatedAt: serverTimestamp()
+          });
+        } else {
+          await setDoc(userRef, {
+            id: docId,
+            ownerUid: docId,
+            username: clampStr(resetPassUser.username || docId, 100),
+            nama: clampStr(resetPassUser.nama || 'Pengguna', 200),
+            role: normalizeMahasiswaRole(resetPassUser.role, resetPassUser.unit),
+            identifier: clampStr(resetPassUser.identifier || '', 100),
+            email: clampStr(resetPassUser.email || '', 200),
+            avatarText: clampStr(resetPassUser.avatarText || 'UB', 10),
+            unit: clampStr(resetPassUser.unit || '', 300),
+            jabatan: clampStr(resetPassUser.jabatan || '', 300),
+            status: resetPassUser.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
+            noHp: clampStr(resetPassUser.noHp || '', 40),
+            terakhirLogin: clampStr(resetPassUser.terakhirLogin || 'Belum pernah login', 120),
+            mustChangePassword: true,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp()
+          });
+        }
       } catch (err: unknown) {
         const errMsg = err instanceof Error ? err.message : String(err);
         setResetPassError(`Error Firestore (Gagal Reset Password): ${errMsg}`);
@@ -2141,7 +2299,10 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setBulkDeleteConfirmOpen(true)}
+                    onClick={() => {
+                      setDeleteModalError(null);
+                      setBulkDeleteConfirmOpen(true);
+                    }}
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold shadow-xs cursor-pointer"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -2190,7 +2351,9 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                   </tr>
                 ) : (
                   paginatedUsers.map((user) => {
-                    const isSelf = currentUser?.username === user.username;
+                    const isSelf =
+                      Boolean(currentUser?.username) &&
+                      currentUser!.username.trim().toLowerCase() === (user.username || '').trim().toLowerCase();
                     const deleteProtected = isUserDeleteProtected(user);
                     return (
                       <tr key={user.id} className="hover:bg-slate-50/80 transition-colors">
@@ -2366,9 +2529,9 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
                               title={
                                 isSelf
                                   ? 'Tidak dapat menghapus akun Anda sendiri'
-                                  : user.role === 'super_admin' && currentRole !== 'super_admin'
+                                  : isSuperAdminRole(user.role) && !isSuperAdminRole(currentRole)
                                   ? 'Terproteksi: Hanya Super Admin yang dapat menghapus akun Super Admin'
-                                  : user.role === 'super_admin' && superAdminTotal <= 1
+                                  : isSuperAdminRole(user.role) && superAdminTotal <= 1
                                   ? 'Minimal 1 akun Super Admin harus dipertahankan dalam sistem'
                                   : 'Hapus User'
                               }
@@ -3527,23 +3690,35 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
               </p>
             </div>
 
+            {deleteModalError && (
+              <div className="mb-3 p-3 bg-rose-100 border border-rose-300 rounded-lg text-rose-800 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{deleteModalError}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-end space-x-3 pt-2">
               <button
                 type="button"
                 id="btn-batal-hapus-user"
-                onClick={() => setUserToDelete(null)}
-                className="px-4 py-2 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 font-semibold transition-all cursor-pointer"
+                disabled={isDeletingUser}
+                onClick={() => {
+                  setDeleteModalError(null);
+                  setUserToDelete(null);
+                }}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 font-semibold transition-all cursor-pointer disabled:opacity-60"
               >
                 Tidak
               </button>
               <button
                 type="button"
                 id="btn-ya-hapus-user"
+                disabled={isDeletingUser}
                 onClick={handleConfirmDeleteUser}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-60"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Ya</span>
+                <span>{isDeletingUser ? 'Menghapus...' : 'Ya'}</span>
               </button>
             </div>
           </div>
@@ -3573,21 +3748,33 @@ export const UserConfigView: React.FC<UserConfigViewProps> = ({
               </p>
             </div>
 
+            {deleteModalError && (
+              <div className="mb-3 p-3 bg-rose-100 border border-rose-300 rounded-lg text-rose-800 text-xs flex items-start gap-2">
+                <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+                <span>{deleteModalError}</span>
+              </div>
+            )}
+
             <div className="flex items-center justify-end space-x-3 pt-2">
               <button
                 type="button"
-                onClick={() => setBulkDeleteConfirmOpen(false)}
-                className="px-4 py-2 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 font-semibold transition-all cursor-pointer"
+                disabled={isDeletingUser}
+                onClick={() => {
+                  setDeleteModalError(null);
+                  setBulkDeleteConfirmOpen(false);
+                }}
+                className="px-4 py-2 border border-slate-300 rounded-lg text-xs text-slate-700 hover:bg-slate-100 font-semibold transition-all cursor-pointer disabled:opacity-60"
               >
                 Batal
               </button>
               <button
                 type="button"
+                disabled={isDeletingUser}
                 onClick={handleConfirmBulkDeleteUsers}
-                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5"
+                className="px-5 py-2 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg text-xs shadow-sm transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-60"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Hapus Semua Terpilih</span>
+                <span>{isDeletingUser ? 'Menghapus...' : 'Hapus Semua Terpilih'}</span>
               </button>
             </div>
           </div>

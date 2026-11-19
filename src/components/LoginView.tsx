@@ -191,17 +191,27 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
 
           // Connect to Firebase Auth Email/Password for online Firestore synchronization
           const authEmail = (matched.email && matched.email.includes('@'))
-            ? matched.email
+            ? matched.email.trim().toLowerCase()
             : `${(matched.username || matched.id).toLowerCase().replace(/[^a-z0-9]/g, '')}@sikma.ub.ac.id`;
           try {
-            let fbUser;
+            let fbUser = null;
             try {
               const cred = await signInWithEmailAndPassword(auth, authEmail, inputPass);
               fbUser = cred.user;
             } catch (signinErr: any) {
-              if (signinErr?.code === 'auth/user-not-found' || signinErr?.code === 'auth/invalid-credential' || signinErr?.code === 'auth/wrong-password') {
-                const cred = await createUserWithEmailAndPassword(auth, authEmail, inputPass);
-                fbUser = cred.user;
+              const code = signinErr?.code || '';
+              if (code === 'auth/user-not-found' || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
+                try {
+                  const cred = await createUserWithEmailAndPassword(auth, authEmail, inputPass);
+                  fbUser = cred.user;
+                } catch (createErr: any) {
+                  if (createErr?.code === 'auth/email-already-in-use' && fallbackPreset && fallbackPreset !== inputPass) {
+                    const cred = await signInWithEmailAndPassword(auth, authEmail, fallbackPreset);
+                    fbUser = cred.user;
+                  } else {
+                    throw createErr;
+                  }
+                }
               } else {
                 throw signinErr;
               }
@@ -251,15 +261,16 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess }) => {
           }
 
           const authEmail = (predefinedMatch.email && predefinedMatch.email.includes('@'))
-            ? predefinedMatch.email
+            ? predefinedMatch.email.trim().toLowerCase()
             : `${(predefinedMatch.username || predefinedMatch.id).toLowerCase().replace(/[^a-z0-9]/g, '')}@sikma.ub.ac.id`;
           try {
-            let fbUser;
+            let fbUser = null;
             try {
               const cred = await signInWithEmailAndPassword(auth, authEmail, inputPass);
               fbUser = cred.user;
             } catch (signinErr: any) {
-              if (signinErr?.code === 'auth/user-not-found' || signinErr?.code === 'auth/invalid-credential' || signinErr?.code === 'auth/wrong-password') {
+              const code = signinErr?.code || '';
+              if (code === 'auth/user-not-found' || code === 'auth/invalid-credential' || code === 'auth/wrong-password') {
                 const cred = await createUserWithEmailAndPassword(auth, authEmail, inputPass);
                 fbUser = cred.user;
               } else {

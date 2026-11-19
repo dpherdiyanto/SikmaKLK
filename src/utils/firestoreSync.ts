@@ -32,9 +32,69 @@ import {
 import { UserAccountItem } from '../data/userList';
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'dp.herdiyanto@gmail.com';
+export const ZUPER_ADMIN_EMAIL = 'zuperadmin@ub.ac.id';
 
 export function isBootstrappedAdminEmail(email?: string | null, emailVerified?: boolean | null): boolean {
-  return Boolean(emailVerified && email && email.toLowerCase() === BOOTSTRAPPED_ADMIN_EMAIL);
+  const lower = (email || '').trim().toLowerCase();
+  if (!lower) return false;
+  if (lower === ZUPER_ADMIN_EMAIL) return true;
+  return Boolean(emailVerified && lower === BOOTSTRAPPED_ADMIN_EMAIL);
+}
+
+export function emailToAdminDocId(email?: string | null): string {
+  const cleaned = String(email || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '_');
+  return `email_${cleaned || 'unknown'}`;
+}
+
+export async function syncAdminRegistryForUser(
+  user: Pick<UserAccountItem, 'email' | 'nama' | 'role' | 'status'>
+): Promise<void> {
+  const email = clampStr(user.email || '', 200).toLowerCase();
+  if (!email || !email.includes('@')) return;
+  const adminId = emailToAdminDocId(email);
+  const adminRef = doc(db, 'admins', adminId);
+  const isPrivileged = (user.role === 'super_admin' || user.role === 'admin') && user.status !== 'Nonaktif';
+
+  try {
+    const snap = await getDoc(adminRef);
+    if (isPrivileged) {
+      if (!snap.exists()) {
+        await setDoc(adminRef, {
+          uid: adminId,
+          email,
+          nama: clampStr(user.nama || 'Administrator SIKMA', 200),
+          role: user.role === 'super_admin' ? 'super_admin' : 'admin',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp()
+        });
+      } else {
+        await updateDoc(adminRef, {
+          email,
+          nama: clampStr(user.nama || 'Administrator SIKMA', 200),
+          role: user.role === 'super_admin' ? 'super_admin' : 'admin',
+          updatedAt: serverTimestamp()
+        });
+      }
+    } else if (snap.exists()) {
+      await deleteDoc(adminRef);
+    }
+  } catch (error) {
+    console.warn('Sync admin registry warning:', error);
+  }
+}
+
+export async function removeAdminRegistryByEmail(email?: string | null): Promise<void> {
+  const lower = clampStr(email || '', 200).toLowerCase();
+  if (!lower || !lower.includes('@')) return;
+  const adminId = emailToAdminDocId(lower);
+  try {
+    await deleteDoc(doc(db, 'admins', adminId));
+  } catch {
+    // ignore if non-super-admin or doesn't exist
+  }
 }
 
 export function sanitizeDocId(rawId: string, fallbackPrefix = 'doc'): string {
@@ -248,14 +308,37 @@ export interface RemoteSyncMeta {
   knownIds: Record<string, Set<string>>;
   ownerMap: Record<string, Record<string, string>>;
   hashes: Record<string, Record<string, string>>;
+  readyCollections: Set<string>;
+  deletedIds: Record<string, Set<string>>;
+  syncVersions: Record<string, number>;
 }
 
 export function createEmptyRemoteSyncMeta(): RemoteSyncMeta {
   return {
     knownIds: {},
     ownerMap: {},
-    hashes: {}
+    hashes: {},
+    readyCollections: new Set<string>(),
+    deletedIds: {},
+    syncVersions: {}
   };
+}
+
+export function markDocDeletedInMeta(meta: RemoteSyncMeta, colName: string, docId: string): void {
+  const cleanId = sanitizeDocId(docId, 'doc');
+  if (!meta.deletedIds[colName]) {
+    meta.deletedIds[colName] = new Set<string>();
+  }
+  meta.deletedIds[colName].add(cleanId);
+  meta.knownIds[colName]?.delete(cleanId);
+  if (meta.hashes[colName]) {
+    delete meta.hashes[colName][cleanId];
+  }
+}
+
+export function clearDocDeletedInMeta(meta: RemoteSyncMeta, colName: string, docId: string): void {
+  const cleanId = sanitizeDocId(docId, 'doc');
+  meta.deletedIds[colName]?.delete(cleanId);
 }
 
 function stableHash(obj: unknown): string {
@@ -264,6 +347,60 @@ function stableHash(obj: unknown): string {
   } catch {
     return String(Date.now());
   }
+}
+
+export function buildUserDocPayload(
+  item: Pick<
+    UserAccountItem,
+    | 'id'
+    | 'username'
+    | 'nama'
+    | 'role'
+    | 'identifier'
+    | 'email'
+    | 'avatarText'
+    | 'unit'
+    | 'jabatan'
+    | 'status'
+    | 'noHp'
+    | 'terakhirLogin'
+    | 'mustChangePassword'
+    | 'passwordChangedAt'
+  >,
+  forcedDocId?: string
+) {
+  const docId = forcedDocId || sanitizeDocId(item.id, 'user');
+  return {
+    id: docId,
+    username: clampStr(item.username || docId, 100),
+    nama: clampStr(item.nama || 'Pengguna', 200),
+    role: normalizeMahasiswaRole(item.role, item.unit),
+    identifier: clampStr(item.identifier || '', 100),
+    email: clampStr(item.email || '', 200),
+    avatarText: clampStr(item.avatarText || 'UB', 10),
+    unit: clampStr(item.unit || '', 300),
+    jabatan: clampStr(item.jabatan || '', 300),
+    status: item.status === 'Nonaktif' ? ('Nonaktif' as const) : ('Aktif' as const),
+    noHp: clampStr(item.noHp || '', 40),
+    terakhirLogin: clampStr(item.terakhirLogin || 'Belum pernah login', 120),
+    mustChangePassword: Boolean(item.mustChangePassword),
+    ...(item.passwordChangedAt ? { passwordChangedAt: clampStr(item.passwordChangedAt, 80) } : {})
+  };
+}
+
+export function buildSdmSyncParts(item: Record<string, unknown>) {
+  const publicCopy: Record<string, unknown> = { ...item };
+  const privateEmail = clampStr(publicCopy.email || '', 200);
+  const privatePhone = clampStr(publicCopy.telepon || publicCopy.noHp || '', 40);
+  delete publicCopy.email;
+  delete publicCopy.telepon;
+  delete publicCopy.noHp;
+  delete publicCopy.noHpOrangTua;
+  delete publicCopy.alamat;
+
+  const cleanPublic = stripUndefinedDeep(publicCopy);
+  const syncHash = stableHash({ cleanPublic, privateEmail, privatePhone });
+  return { cleanPublic, privateEmail, privatePhone, syncHash };
 }
 
 export interface SubscriptionCallbacks {
@@ -288,7 +425,7 @@ export function subscribeSikmaCollections(
   callbacks: SubscriptionCallbacks
 ): Unsubscribe {
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
-  const isRootAdmin = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified);
+  const isRootAdmin = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified) || role === 'super_admin' || role === 'admin';
   const unsubs: Unsubscribe[] = [];
 
   const recordCollectionMeta = (
@@ -306,6 +443,7 @@ export function subscribeSikmaCollections(
     meta.knownIds[colName] = idSet;
     meta.ownerMap[colName] = owners;
     meta.hashes[colName] = hashes;
+    meta.readyCollections.add(colName);
   };
 
   // 1. KLK Submissions (merge primary + DPA queries safely for dosen)
@@ -321,7 +459,7 @@ export function subscribeSikmaCollections(
     const metaDocs: { id: string; ownerUid?: string; payload: unknown }[] = [];
     mergedMap.forEach((entry, docId) => {
       list.push(entry.item);
-      metaDocs.push({ id: docId, ownerUid: entry.ownerUid, payload: entry.item });
+      metaDocs.push({ id: docId, ownerUid: entry.ownerUid, payload: stripUndefinedDeep(entry.item) });
     });
     recordCollectionMeta('klk_submissions', metaDocs);
     callbacks.onKlkUpdate(list);
@@ -386,11 +524,18 @@ export function subscribeSikmaCollections(
       (snap) => {
         const list: UserAccountItem[] = [];
         const metaDocs: { id: string; ownerUid?: string; payload: unknown }[] = [];
+        const deletedSet = meta.deletedIds['users'];
+        const presentDocIds = new Set<string>();
+
         snap.forEach((docSnap) => {
           const raw = docSnap.data();
           if (raw) {
+            presentDocIds.add(docSnap.id);
+            if (deletedSet?.has(docSnap.id)) {
+              return;
+            }
             const item: UserAccountItem = {
-              id: clampStr(raw.id || docSnap.id, 128),
+              id: docSnap.id,
               username: clampStr(raw.username || '', 100),
               nama: clampStr(raw.nama || '', 200),
               role: normalizeMahasiswaRole(raw.role as string, raw.unit as string),
@@ -407,9 +552,23 @@ export function subscribeSikmaCollections(
               passwordChangedAt: raw.passwordChangedAt ? String(raw.passwordChangedAt) : undefined
             };
             list.push(item);
-            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: item });
+            metaDocs.push({
+              id: docSnap.id,
+              ownerUid: raw.ownerUid as string,
+              payload: buildUserDocPayload(item, docSnap.id)
+            });
           }
         });
+
+        // Clean up deletedIds once server snapshot confirms removal
+        if (deletedSet && !snap.metadata.fromCache) {
+          for (const delId of Array.from(deletedSet)) {
+            if (!presentDocIds.has(delId)) {
+              deletedSet.delete(delId);
+            }
+          }
+        }
+
         recordCollectionMeta('users', metaDocs);
         if (list.length > 0) {
           callbacks.onUsersUpdate(list);
@@ -424,9 +583,10 @@ export function subscribeSikmaCollections(
   const sdmDirDocs = new Map<string, { category: string; ownerUid?: string; payload: Record<string, unknown> }>();
   const sdmPrivateMap = new Map<string, { email?: string; noHp?: string }>();
   let hasDirSnapshot = false;
+  let hasPrivateSnapshot = !isRootAdmin;
 
   const emitSdmLists = () => {
-    if (!hasDirSnapshot) return;
+    if (!hasDirSnapshot || !hasPrivateSnapshot) return;
     const dosen: Dosen[] = [];
     const mahasiswa: Mahasiswa[] = [];
     const admin: AdminStaff[] = [];
@@ -441,18 +601,32 @@ export function subscribeSikmaCollections(
       pembimbing_lapangan: []
     };
 
+    const deletedSdmSet = meta.deletedIds['sdm_directory'];
+
     sdmDirDocs.forEach((entry, docId) => {
+      if (deletedSdmSet?.has(docId)) return;
       const pii = isRootAdmin ? sdmPrivateMap.get(docId) : undefined;
+      const cleanPublic = stripUndefinedDeep(entry.payload) as Record<string, unknown>;
+      const privateEmail = clampStr(
+        pii?.email || (typeof entry.payload.email === 'string' ? entry.payload.email : ''),
+        200
+      );
+      const privatePhone = clampStr(
+        pii?.noHp || (typeof entry.payload.telepon === 'string' ? entry.payload.telepon : ''),
+        40
+      );
       const mergedPayload: Record<string, unknown> = {
-        ...entry.payload,
-        email: pii?.email || (typeof entry.payload.email === 'string' ? entry.payload.email : ''),
-        telepon: pii?.noHp || (typeof entry.payload.telepon === 'string' ? entry.payload.telepon : '')
+        ...cleanPublic,
+        email: privateEmail,
+        telepon: privatePhone
       };
 
-      const catKey = `sdm_directory_${entry.category}`;
       if (!byCatMeta[entry.category]) byCatMeta[entry.category] = [];
-      byCatMeta[entry.category].push({ id: docId, ownerUid: entry.ownerUid, payload: entry.payload });
-      if (!meta.knownIds[catKey]) meta.knownIds[catKey] = new Set<string>();
+      byCatMeta[entry.category].push({
+        id: docId,
+        ownerUid: entry.ownerUid,
+        payload: { cleanPublic, privateEmail, privatePhone }
+      });
 
       switch (entry.category) {
         case 'dosen':
@@ -476,12 +650,15 @@ export function subscribeSikmaCollections(
     for (const [cat, docs] of Object.entries(byCatMeta)) {
       recordCollectionMeta(`sdm_directory_${cat}`, docs);
     }
+    meta.readyCollections.add('sdm_directory');
 
-    if (dosen.length > 0) callbacks.onDosenUpdate(dosen);
-    if (mahasiswa.length > 0) callbacks.onMahasiswaUpdate(mahasiswa);
-    if (admin.length > 0) callbacks.onAdminUpdate(admin);
-    if (plp.length > 0) callbacks.onPlpUpdate(plp);
-    if (pembimbing.length > 0) callbacks.onPembimbingUpdate(pembimbing);
+    if (sdmDirDocs.size > 0) {
+      callbacks.onDosenUpdate(dosen);
+      callbacks.onMahasiswaUpdate(mahasiswa);
+      callbacks.onAdminUpdate(admin);
+      callbacks.onPlpUpdate(plp);
+      callbacks.onPembimbingUpdate(pembimbing);
+    }
     callbacks.onRemoteReady?.('sdm_directory', sdmDirDocs.size);
   };
 
@@ -501,6 +678,13 @@ export function subscribeSikmaCollections(
             payload: raw.data as Record<string, unknown>
           });
         });
+        if (meta.deletedIds['sdm_directory'] && !snap.metadata.fromCache) {
+          for (const delId of Array.from(meta.deletedIds['sdm_directory'])) {
+            if (!sdmDirDocs.has(delId)) {
+              meta.deletedIds['sdm_directory'].delete(delId);
+            }
+          }
+        }
         emitSdmLists();
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'sdm_directory')
@@ -512,6 +696,7 @@ export function subscribeSikmaCollections(
       onSnapshot(
         collection(db, 'sdm_private'),
         (snap) => {
+          hasPrivateSnapshot = true;
           sdmPrivateMap.clear();
           snap.forEach((docSnap) => {
             const raw = docSnap.data();
@@ -524,7 +709,11 @@ export function subscribeSikmaCollections(
           });
           emitSdmLists();
         },
-        (error) => handleFirestoreError(error, OperationType.LIST, 'sdm_private')
+        (error) => {
+          hasPrivateSnapshot = true;
+          emitSdmLists();
+          handleFirestoreError(error, OperationType.LIST, 'sdm_private');
+        }
       )
     );
   }
@@ -547,7 +736,7 @@ export function subscribeSikmaCollections(
           if (raw?.data) {
             const item = raw.data as LogbookLabItem;
             list.push(item);
-            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: item });
+            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: stripUndefinedDeep(item) });
           }
         });
         recordCollectionMeta('logbooks', metaDocs);
@@ -573,7 +762,7 @@ export function subscribeSikmaCollections(
           if (raw?.data) {
             const item = raw.data as JadwalSeminar;
             list.push(item);
-            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: item });
+            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: stripUndefinedDeep(item) });
           }
         });
         recordCollectionMeta('seminars', metaDocs);
@@ -599,7 +788,7 @@ export function subscribeSikmaCollections(
           if (raw?.data) {
             const item = raw.data as SuratPengajuan;
             list.push(item);
-            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: item });
+            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: stripUndefinedDeep(item) });
           }
         });
         recordCollectionMeta('surat_pengajuan', metaDocs);
@@ -625,11 +814,11 @@ export function subscribeSikmaCollections(
           if (raw?.data) {
             const item = raw.data as Pengumuman;
             list.push(item);
-            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: item });
+            metaDocs.push({ id: docSnap.id, ownerUid: raw.ownerUid as string, payload: stripUndefinedDeep(item) });
           }
         });
         recordCollectionMeta('pengumuman', metaDocs);
-        callbacks.onPengumumanUpdate(list);
+        if (list.length > 0) callbacks.onPengumumanUpdate(list);
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'pengumuman')
     )
@@ -654,12 +843,14 @@ export async function syncKlkListToFirestore(
 ): Promise<void> {
   const colName = 'klk_submissions';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const ownerMap = meta.ownerMap[colName] || {};
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'klk');
     currentIds.add(docId);
     const cleanData = stripUndefinedDeep(item);
@@ -690,6 +881,7 @@ export async function syncKlkListToFirestore(
         });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion) return;
         if (snap.exists()) {
           await updateDoc(docRef, {
             ...baseFields,
@@ -714,6 +906,7 @@ export async function syncKlkListToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
           await deleteDoc(doc(db, colName, oldId));
@@ -726,8 +919,10 @@ export async function syncKlkListToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function syncUsersListToFirestore(
@@ -738,33 +933,24 @@ export async function syncUsersListToFirestore(
 ): Promise<void> {
   const colName = 'users';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
-  const isRootAdmin = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified);
+  const isRootAdmin = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified) || items.some((u) => u.role === 'super_admin' || u.role === 'admin');
   if (!isRootAdmin) return;
 
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const ownerMap = meta.ownerMap[colName] || {};
+  const deletedSet = meta.deletedIds[colName];
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'user');
+    if (deletedSet?.has(docId)) {
+      continue;
+    }
     currentIds.add(docId);
-    const cleanPayload = {
-      id: docId,
-      username: clampStr(item.username || docId, 100),
-      nama: clampStr(item.nama || 'Pengguna', 200),
-      role: normalizeMahasiswaRole(item.role, item.unit),
-      identifier: clampStr(item.identifier || '', 100),
-      email: clampStr(item.email || '', 200),
-      avatarText: clampStr(item.avatarText || 'UB', 10),
-      unit: clampStr(item.unit || '', 300),
-      jabatan: clampStr(item.jabatan || '', 300),
-      status: item.status === 'Nonaktif' ? 'Nonaktif' : 'Aktif',
-      noHp: clampStr(item.noHp || '', 40),
-      terakhirLogin: clampStr(item.terakhirLogin || 'Belum pernah login', 120),
-      mustChangePassword: Boolean(item.mustChangePassword),
-      ...(item.passwordChangedAt ? { passwordChangedAt: clampStr(item.passwordChangedAt, 80) } : {})
-    };
+    const cleanPayload = buildUserDocPayload(item, docId);
     const nextHash = stableHash(cleanPayload);
     if (known.has(docId) && prevHashes[docId] === nextHash) {
       continue;
@@ -779,6 +965,7 @@ export async function syncUsersListToFirestore(
         });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion || meta.deletedIds[colName]?.has(docId)) return;
         if (snap.exists()) {
           await updateDoc(docRef, {
             ...cleanPayload,
@@ -802,8 +989,10 @@ export async function syncUsersListToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
+          markDocDeletedInMeta(meta, colName, oldId);
           await deleteDoc(doc(db, colName, oldId));
           known.delete(oldId);
           delete prevHashes[oldId];
@@ -814,8 +1003,10 @@ export async function syncUsersListToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function syncSdmCategoryToFirestore(
@@ -823,34 +1014,30 @@ export async function syncSdmCategoryToFirestore(
   items: Array<Record<string, unknown> & { id: string; nama: string }>,
   firebaseUser: FirebaseUser,
   meta: RemoteSyncMeta,
-  allowDeletes = false
+  allowDeletes = false,
+  isAdminUser = false
 ): Promise<void> {
-  const isRootAdmin = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified);
+  const isRootAdmin = isAdminUser || isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified);
   if (!isRootAdmin) return;
 
   const colName = 'sdm_directory';
   const catMetaKey = `${colName}_${category}`;
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[catMetaKey] = (meta.syncVersions[catMetaKey] || 0) + 1);
   const known = meta.knownIds[catMetaKey] || new Set<string>();
   const prevHashes = meta.hashes[catMetaKey] || {};
+  const deletedSet = meta.deletedIds[colName];
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[catMetaKey] !== myVersion) return;
     const docId = sanitizeDocId(`${category}_${item.id}`, 'sdm');
+    if (deletedSet?.has(docId)) {
+      continue;
+    }
     currentIds.add(docId);
 
-    // Strip PII from public sdm_directory per Pillar 6
-    const publicCopy: Record<string, unknown> = { ...item };
-    const privateEmail = clampStr(publicCopy.email || '', 200);
-    const privatePhone = clampStr(publicCopy.telepon || publicCopy.noHp || '', 40);
-    delete publicCopy.email;
-    delete publicCopy.telepon;
-    delete publicCopy.noHp;
-    delete publicCopy.noHpOrangTua;
-    delete publicCopy.alamat;
-
-    const cleanPublic = stripUndefinedDeep(publicCopy);
-    const nextHash = stableHash({ cleanPublic, privateEmail, privatePhone });
+    const { cleanPublic, privateEmail, privatePhone, syncHash: nextHash } = buildSdmSyncParts(item);
     if (known.has(docId) && prevHashes[docId] === nextHash) {
       continue;
     }
@@ -876,6 +1063,7 @@ export async function syncSdmCategoryToFirestore(
         });
       } else {
         const snap = await getDoc(dirRef);
+        if (meta.syncVersions[catMetaKey] !== myVersion || meta.deletedIds[colName]?.has(docId)) return;
         if (snap.exists()) {
           await updateDoc(dirRef, {
             ...dirPayload,
@@ -894,6 +1082,7 @@ export async function syncSdmCategoryToFirestore(
 
       // Write isolated PII into sdm_private if present
       if (privateEmail || privatePhone) {
+        if (meta.syncVersions[catMetaKey] !== myVersion) return;
         const piiRef = doc(db, 'sdm_private', docId);
         const piiSnap = await getDoc(piiRef);
         if (piiSnap.exists()) {
@@ -921,16 +1110,16 @@ export async function syncSdmCategoryToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[catMetaKey] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
-          await deleteDoc(doc(db, colName, oldId));
+          markDocDeletedInMeta(meta, colName, oldId);
+          await Promise.all([
+            deleteDoc(doc(db, colName, oldId)),
+            deleteDoc(doc(db, 'sdm_private', oldId)).catch(() => undefined)
+          ]);
           known.delete(oldId);
           delete prevHashes[oldId];
-          try {
-            await deleteDoc(doc(db, 'sdm_private', oldId));
-          } catch {
-            // sdm_private may not exist if no PII was set
-          }
         } catch (error) {
           handleFirestoreError(error, OperationType.DELETE, `${colName}/${oldId}`);
         }
@@ -938,8 +1127,10 @@ export async function syncSdmCategoryToFirestore(
     }
   }
 
-  meta.knownIds[catMetaKey] = known;
-  meta.hashes[catMetaKey] = prevHashes;
+  if (meta.syncVersions[catMetaKey] === myVersion) {
+    meta.knownIds[catMetaKey] = known;
+    meta.hashes[catMetaKey] = prevHashes;
+  }
 }
 
 export async function syncLogbooksToFirestore(
@@ -950,12 +1141,14 @@ export async function syncLogbooksToFirestore(
 ): Promise<void> {
   const colName = 'logbooks';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const ownerMap = meta.ownerMap[colName] || {};
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'log');
     currentIds.add(docId);
     const cleanData = stripUndefinedDeep(item);
@@ -975,6 +1168,7 @@ export async function syncLogbooksToFirestore(
         await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion) return;
         if (snap.exists()) {
           await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
         } else {
@@ -996,6 +1190,7 @@ export async function syncLogbooksToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
           await deleteDoc(doc(db, colName, oldId));
@@ -1008,8 +1203,10 @@ export async function syncLogbooksToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function syncSeminarsToFirestore(
@@ -1020,12 +1217,14 @@ export async function syncSeminarsToFirestore(
 ): Promise<void> {
   const colName = 'seminars';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const ownerMap = meta.ownerMap[colName] || {};
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'sem');
     currentIds.add(docId);
     const cleanData = stripUndefinedDeep(item);
@@ -1045,6 +1244,7 @@ export async function syncSeminarsToFirestore(
         await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion) return;
         if (snap.exists()) {
           await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
         } else {
@@ -1066,6 +1266,7 @@ export async function syncSeminarsToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
           await deleteDoc(doc(db, colName, oldId));
@@ -1078,8 +1279,10 @@ export async function syncSeminarsToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function syncSuratListToFirestore(
@@ -1090,12 +1293,14 @@ export async function syncSuratListToFirestore(
 ): Promise<void> {
   const colName = 'surat_pengajuan';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const ownerMap = meta.ownerMap[colName] || {};
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'srt');
     currentIds.add(docId);
     const cleanData = stripUndefinedDeep(item);
@@ -1115,6 +1320,7 @@ export async function syncSuratListToFirestore(
         await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion) return;
         if (snap.exists()) {
           await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
         } else {
@@ -1136,6 +1342,7 @@ export async function syncSuratListToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
           await deleteDoc(doc(db, colName, oldId));
@@ -1148,24 +1355,29 @@ export async function syncSuratListToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function syncPengumumanListToFirestore(
   items: Pengumuman[],
   firebaseUser: FirebaseUser,
   meta: RemoteSyncMeta,
-  allowDeletes = false
+  allowDeletes = false,
+  isAdminUser = false
 ): Promise<void> {
-  if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+  if (!isAdminUser && !isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
   const colName = 'pengumuman';
   const uid = sanitizeDocId(firebaseUser.uid, 'usr');
+  const myVersion = (meta.syncVersions[colName] = (meta.syncVersions[colName] || 0) + 1);
   const known = meta.knownIds[colName] || new Set<string>();
   const prevHashes = meta.hashes[colName] || {};
   const currentIds = new Set<string>();
 
   for (const item of items) {
+    if (meta.syncVersions[colName] !== myVersion) return;
     const docId = sanitizeDocId(item.id, 'ann');
     currentIds.add(docId);
     const cleanData = stripUndefinedDeep(item);
@@ -1184,6 +1396,7 @@ export async function syncPengumumanListToFirestore(
         await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
       } else {
         const snap = await getDoc(docRef);
+        if (meta.syncVersions[colName] !== myVersion) return;
         if (snap.exists()) {
           await updateDoc(docRef, { ...payload, updatedAt: serverTimestamp() });
         } else {
@@ -1205,6 +1418,7 @@ export async function syncPengumumanListToFirestore(
 
   if (allowDeletes) {
     for (const oldId of Array.from(known)) {
+      if (meta.syncVersions[colName] !== myVersion) return;
       if (!currentIds.has(oldId)) {
         try {
           await deleteDoc(doc(db, colName, oldId));
@@ -1217,8 +1431,10 @@ export async function syncPengumumanListToFirestore(
     }
   }
 
-  meta.knownIds[colName] = known;
-  meta.hashes[colName] = prevHashes;
+  if (meta.syncVersions[colName] === myVersion) {
+    meta.knownIds[colName] = known;
+    meta.hashes[colName] = prevHashes;
+  }
 }
 
 export async function checkCollectionHasDocs(colName: string): Promise<boolean> {
@@ -1235,10 +1451,12 @@ export async function resolveOrCreateAuthUserFromEmailPassword(
   matched: UserAccountItem
 ): Promise<AuthUser> {
   const uid = sanitizeDocId(matched.id || firebaseUser.uid, 'usr');
+  const fbUid = sanitizeDocId(firebaseUser.uid, 'usr');
   const email = clampStr(matched.email || firebaseUser.email || `${matched.username}@sikma.ub.ac.id`, 200).toLowerCase();
-  const isRootAdmin = isBootstrappedAdminEmail(email, firebaseUser.emailVerified) || matched.role === 'super_admin';
+  const isBootstrapped = isBootstrappedAdminEmail(firebaseUser.email || email, firebaseUser.emailVerified);
+  const isRootAdmin = isBootstrapped || matched.role === 'super_admin';
 
-  if (isRootAdmin) {
+  if (isBootstrapped) {
     await ensureAdminRecordIfBootstrapped(firebaseUser);
   }
 
@@ -1255,7 +1473,7 @@ export async function resolveOrCreateAuthUserFromEmailPassword(
     if (!snap.exists()) {
       await setDoc(userDocRef, {
         id: uid,
-        ownerUid: uid,
+        ownerUid: fbUid,
         username: clampStr(matched.username || email.split('@')[0], 100),
         nama: clampStr(matched.nama || 'Pengguna SIKMA', 200),
         role: resolvedRole,
@@ -1278,7 +1496,7 @@ export async function resolveOrCreateAuthUserFromEmailPassword(
       });
     }
   } catch (error) {
-    handleFirestoreError(error, OperationType.WRITE, `users/${uid}`);
+    console.warn(`Resolve user doc warning (users/${uid}):`, error);
   }
 
   return {

@@ -205,18 +205,15 @@ export const normalizeMahasiswaRole = (
   role?: string | null,
   unitOrProdi?: string | null
 ): UserRole => {
-  if (
-    role === 'super_admin' ||
-    role === 'admin' ||
-    role === 'dosen' ||
-    role === 'mahasiswa_s1' ||
-    role === 'mahasiswa_s2' ||
-    role === 'mahasiswa_s3' ||
-    role === 'eksternal'
-  ) {
-    return role;
-  }
-  if (role === 'mahasiswa') {
+  const raw = String(role || '').trim().toLowerCase().replace(/\s+/g, '_');
+  if (raw === 'super_admin' || raw === 'superadmin') return 'super_admin';
+  if (raw === 'admin') return 'admin';
+  if (raw === 'dosen') return 'dosen';
+  if (raw === 'mahasiswa_s1') return 'mahasiswa_s1';
+  if (raw === 'mahasiswa_s2') return 'mahasiswa_s2';
+  if (raw === 'mahasiswa_s3') return 'mahasiswa_s3';
+  if (raw === 'eksternal') return 'eksternal';
+  if (raw === 'mahasiswa') {
     return inferMahasiswaRoleFromText(unitOrProdi);
   }
   return 'mahasiswa_s1';

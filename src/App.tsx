@@ -16,7 +16,10 @@ import {
   syncSuratListToFirestore,
   syncPengumumanListToFirestore,
   checkCollectionHasDocs,
-  isBootstrappedAdminEmail
+  isBootstrappedAdminEmail,
+  markDocDeletedInMeta,
+  clearDocDeletedInMeta,
+  sanitizeDocId
 } from './utils/firestoreSync';
 import {
   ActiveTab,
@@ -151,8 +154,16 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
   const [isAuthReady, setIsAuthReady] = useState<boolean>(false);
   const remoteMetaRef = useRef(createEmptyRemoteSyncMeta());
-  const isApplyingRemoteRef = useRef<boolean>(false);
+  const remoteApplyDepthRef = useRef<number>(0);
   const hasSeededCloudRef = useRef<boolean>(false);
+
+  const applyFromRemote = (updater: () => void) => {
+    remoteApplyDepthRef.current += 1;
+    updater();
+    setTimeout(() => {
+      remoteApplyDepthRef.current = Math.max(0, remoteApplyDepthRef.current - 1);
+    }, 100);
+  };
 
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, (fbUser) => {
@@ -491,127 +502,102 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
   useEffect(() => {
     if (!isAuthReady || !firebaseUser || !currentUser) return;
 
+    remoteMetaRef.current = createEmptyRemoteSyncMeta();
+    hasSeededCloudRef.current = false;
+
     const unsub = subscribeSikmaCollections(
       firebaseUser,
       currentRole,
       remoteMetaRef.current,
       {
         onKlkUpdate: (remoteItems) => {
-          isApplyingRemoteRef.current = true;
-          setKlkList(remoteItems);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setKlkList(remoteItems));
         },
         onUsersUpdate: (remoteUsers) => {
           if (remoteUsers.length === 0) return;
-          isApplyingRemoteRef.current = true;
-          setUserList((prev) => {
-            const byId = new Map<string, UserAccountItem>(prev.map((u) => [u.id, u]));
-            for (const r of remoteUsers) {
-              const existingLocal = byId.get(r.id);
-              byId.set(r.id, existingLocal?.password ? { ...r, password: existingLocal.password } : r);
-            }
-            return Array.from(byId.values());
+          const adminViewer = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified) || currentRole === 'super_admin' || currentRole === 'admin';
+          applyFromRemote(() => {
+            setUserList((prev) => {
+              const byId = new Map<string, UserAccountItem>(prev.map((u) => [u.id, u]));
+              if (adminViewer) {
+                return remoteUsers.map((r) => {
+                  const existingLocal = byId.get(r.id);
+                  return existingLocal?.password ? { ...r, password: existingLocal.password } : r;
+                });
+              }
+              for (const r of remoteUsers) {
+                const existingLocal = byId.get(r.id);
+                byId.set(r.id, existingLocal?.password ? { ...r, password: existingLocal.password } : r);
+              }
+              return Array.from(byId.values());
+            });
           });
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
         },
         onDosenUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setDosenList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setDosenList(items));
         },
         onMahasiswaUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setMahasiswaList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setMahasiswaList(items));
         },
         onAdminUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setAdminList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setAdminList(items));
         },
         onPlpUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setPlpList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setPlpList(items));
         },
         onPembimbingUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setPembimbingLapanganList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setPembimbingLapanganList(items));
         },
         onLogbooksUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setLogbooks(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setLogbooks(items));
         },
         onSeminarsUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setSeminarList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setSeminarList(items));
         },
         onSuratUpdate: (items) => {
-          isApplyingRemoteRef.current = true;
-          setSuratList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setSuratList(items));
         },
         onPengumumanUpdate: (items) => {
           if (items.length === 0) return;
-          isApplyingRemoteRef.current = true;
-          setPengumumanList(items);
-          setTimeout(() => {
-            isApplyingRemoteRef.current = false;
-          }, 150);
+          applyFromRemote(() => setPengumumanList(items));
         }
       }
     );
 
-    // Bootstrap initial master SDM & User collections once if bootstrapped admin logs into empty Firestore
-    if (
-      !hasSeededCloudRef.current &&
-      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
-    ) {
+    // Bootstrap initial master SDM & User collections ONLY if collections are completely empty in Firestore
+    const isAdminUser = isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified) || currentRole === 'super_admin' || currentRole === 'admin';
+    if (!hasSeededCloudRef.current && isAdminUser) {
       hasSeededCloudRef.current = true;
       void (async () => {
         try {
-          const hasSdm = await checkCollectionHasDocs('sdm_directory');
+          const [hasSdm, hasUsers, hasPengumuman, hasSeminars, hasLogbooks, hasSurat] = await Promise.all([
+            checkCollectionHasDocs('sdm_directory'),
+            checkCollectionHasDocs('users'),
+            checkCollectionHasDocs('pengumuman'),
+            checkCollectionHasDocs('seminars'),
+            checkCollectionHasDocs('logbooks'),
+            checkCollectionHasDocs('surat_pengajuan')
+          ]);
           if (!hasSdm) {
-            await syncSdmCategoryToFirestore('dosen', dosenList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
-            await syncSdmCategoryToFirestore('mahasiswa', mahasiswaList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
-            await syncSdmCategoryToFirestore('admin', adminList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
-            await syncSdmCategoryToFirestore('plp', plpList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
-            await syncSdmCategoryToFirestore('pembimbing_lapangan', pembimbingLapanganList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current);
+            await syncSdmCategoryToFirestore('dosen', dosenList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current, false, isAdminUser);
+            await syncSdmCategoryToFirestore('mahasiswa', mahasiswaList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current, false, isAdminUser);
+            await syncSdmCategoryToFirestore('admin', adminList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current, false, isAdminUser);
+            await syncSdmCategoryToFirestore('plp', plpList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current, false, isAdminUser);
+            await syncSdmCategoryToFirestore('pembimbing_lapangan', pembimbingLapanganList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>, firebaseUser, remoteMetaRef.current, false, isAdminUser);
           }
-          await syncUsersListToFirestore(userList, firebaseUser, remoteMetaRef.current, false);
-          if (pengumumanList.length > 0) {
-            await syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, false);
+          if (!hasUsers && userList.length > 0) {
+            await syncUsersListToFirestore(userList, firebaseUser, remoteMetaRef.current, false);
           }
-          if (!(await checkCollectionHasDocs('seminars')) && seminarList.length > 0) {
+          if (!hasPengumuman && pengumumanList.length > 0) {
+            await syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, false, isAdminUser);
+          }
+          if (!hasSeminars && seminarList.length > 0) {
             await syncSeminarsToFirestore(seminarList, firebaseUser, remoteMetaRef.current, false);
           }
-          if (!(await checkCollectionHasDocs('logbooks')) && logbooks.length > 0) {
+          if (!hasLogbooks && logbooks.length > 0) {
             await syncLogbooksToFirestore(logbooks, firebaseUser, remoteMetaRef.current, false);
           }
-          if (!(await checkCollectionHasDocs('surat_pengajuan')) && suratList.length > 0) {
+          if (!hasSurat && suratList.length > 0) {
             await syncSuratListToFirestore(suratList, firebaseUser, remoteMetaRef.current, false);
           }
         } catch (err) {
@@ -620,125 +606,140 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
       })();
     }
 
-    return () => unsub();
+    return () => {
+      unsub();
+      remoteMetaRef.current = createEmptyRemoteSyncMeta();
+      hasSeededCloudRef.current = false;
+    };
   }, [isAuthReady, firebaseUser, currentUser, currentRole]);
 
-  // Sync local mutations to Firestore when authenticated with Firebase
+  // Sync local mutations to Firestore ONLY after remote initial snapshot is ready
+  const isAdminUser = isBootstrappedAdminEmail(firebaseUser?.email, firebaseUser?.emailVerified) || currentRole === 'super_admin' || currentRole === 'admin';
+
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!remoteMetaRef.current.readyCollections.has('klk_submissions')) return;
     void syncKlkListToFirestore(
       klkList,
       firebaseUser,
       remoteMetaRef.current,
-      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+      isAdminUser
     ).catch((err) => console.error('Sync KLK error:', err));
-  }, [klkList, isAuthReady, firebaseUser, currentUser]);
+  }, [klkList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('users')) return;
     void syncUsersListToFirestore(userList, firebaseUser, remoteMetaRef.current, true).catch((err) =>
       console.error('Sync Users error:', err)
     );
-  }, [userList, isAuthReady, firebaseUser, currentUser]);
+  }, [userList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('sdm_directory')) return;
     void syncSdmCategoryToFirestore(
       'dosen',
       dosenList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
       firebaseUser,
       remoteMetaRef.current,
-      true
+      true,
+      isAdminUser
     ).catch((err) => console.error('Sync Dosen error:', err));
-  }, [dosenList, isAuthReady, firebaseUser, currentUser]);
+  }, [dosenList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('sdm_directory')) return;
     void syncSdmCategoryToFirestore(
       'mahasiswa',
       mahasiswaList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
       firebaseUser,
       remoteMetaRef.current,
-      true
+      true,
+      isAdminUser
     ).catch((err) => console.error('Sync Mahasiswa error:', err));
-  }, [mahasiswaList, isAuthReady, firebaseUser, currentUser]);
+  }, [mahasiswaList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('sdm_directory')) return;
     void syncSdmCategoryToFirestore(
       'admin',
       adminList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
       firebaseUser,
       remoteMetaRef.current,
-      true
+      true,
+      isAdminUser
     ).catch((err) => console.error('Sync Admin error:', err));
-  }, [adminList, isAuthReady, firebaseUser, currentUser]);
+  }, [adminList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('sdm_directory')) return;
     void syncSdmCategoryToFirestore(
       'plp',
       plpList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
       firebaseUser,
       remoteMetaRef.current,
-      true
+      true,
+      isAdminUser
     ).catch((err) => console.error('Sync PLP error:', err));
-  }, [plpList, isAuthReady, firebaseUser, currentUser]);
+  }, [plpList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('sdm_directory')) return;
     void syncSdmCategoryToFirestore(
       'pembimbing_lapangan',
       pembimbingLapanganList as unknown as Array<Record<string, unknown> & { id: string; nama: string }>,
       firebaseUser,
       remoteMetaRef.current,
-      true
+      true,
+      isAdminUser
     ).catch((err) => console.error('Sync Pembimbing Lapangan error:', err));
-  }, [pembimbingLapanganList, isAuthReady, firebaseUser, currentUser]);
+  }, [pembimbingLapanganList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!remoteMetaRef.current.readyCollections.has('logbooks')) return;
     void syncLogbooksToFirestore(
       logbooks,
       firebaseUser,
       remoteMetaRef.current,
-      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+      isAdminUser
     ).catch((err) => console.error('Sync Logbooks error:', err));
-  }, [logbooks, isAuthReady, firebaseUser, currentUser]);
+  }, [logbooks, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!remoteMetaRef.current.readyCollections.has('seminars')) return;
     void syncSeminarsToFirestore(
       seminarList,
       firebaseUser,
       remoteMetaRef.current,
-      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+      isAdminUser
     ).catch((err) => console.error('Sync Seminars error:', err));
-  }, [seminarList, isAuthReady, firebaseUser, currentUser]);
+  }, [seminarList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!remoteMetaRef.current.readyCollections.has('surat_pengajuan')) return;
     void syncSuratListToFirestore(
       suratList,
       firebaseUser,
       remoteMetaRef.current,
-      isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)
+      isAdminUser
     ).catch((err) => console.error('Sync Surat error:', err));
-  }, [suratList, isAuthReady, firebaseUser, currentUser]);
+  }, [suratList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   useEffect(() => {
-    if (!isAuthReady || !firebaseUser || !currentUser || isApplyingRemoteRef.current) return;
-    if (!isBootstrappedAdminEmail(firebaseUser.email, firebaseUser.emailVerified)) return;
-    void syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, true).catch((err) =>
+    if (!isAuthReady || !firebaseUser || !currentUser || remoteApplyDepthRef.current > 0) return;
+    if (!isAdminUser || !remoteMetaRef.current.readyCollections.has('pengumuman')) return;
+    void syncPengumumanListToFirestore(pengumumanList, firebaseUser, remoteMetaRef.current, true, isAdminUser).catch((err) =>
       console.error('Sync Pengumuman error:', err)
     );
-  }, [pengumumanList, isAuthReady, firebaseUser, currentUser]);
+  }, [pengumumanList, isAuthReady, firebaseUser, currentUser, currentRole]);
 
   // Guard: if role is restricted for active tab, redirect
   useEffect(() => {
@@ -794,13 +795,16 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
     pbList: PembimbingLapanganStaff[] = pembimbingLapanganList,
     logList?: LogbookLabItem[],
     semList?: JadwalSeminar[],
-    surList?: SuratPengajuan[]
+    surList?: SuratPengajuan[],
+    options?: { skipReverseSdmUserCreation?: boolean }
   ) => {
     // 0. Sinkronisasi dua arah menyeluruh: jika ada penambahan/perubahan di User Accounts (Config -> User),
     // otomatis daftarkan ke SDM (Dosen, Mahasiswa, Admin, PLP, Pembimbing Lapangan). Sebaliknya jika ada entitas baru di SDM,
-    // otomatis buatkan User Account.
+    // otomatis buatkan User Account (kecuali saat menghapus/mengedit user agar data yang sudah dihapus tidak bangkit kembali).
     const baseUsers = uList || userList;
-    const bidir = syncBidirectionalUsersAndSdm(baseUsers, dList, mList, aList, pList, pbList);
+    const bidir = syncBidirectionalUsersAndSdm(baseUsers, dList, mList, aList, pList, pbList, {
+      skipReverseUserCreation: options?.skipReverseSdmUserCreation
+    });
     const activeDosen = bidir.syncedDosen;
     const activeMahasiswa = bidir.syncedMahasiswa;
     const activeAdmin = bidir.syncedAdmin;
@@ -1774,7 +1778,7 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
                 }}
                 userList={userList}
                 onUpdateUserList={(newList) => {
-                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, newList, pembimbingLapanganList);
+                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, newList, pembimbingLapanganList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
                 dosenList={dosenList}
                 mahasiswaList={mahasiswaList}
@@ -1786,7 +1790,15 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
                 seminarList={seminarList}
                 suratList={suratList}
                 onLogout={handleLogout}
-                onSyncAllModules={(d, m, a, p, k, u, pb, log, sem, sur) => {
+                onBeforeDeleteUserIds={(ids) => {
+                  ids.forEach((id) =>
+                    markDocDeletedInMeta(remoteMetaRef.current, 'users', sanitizeDocId(id, 'user'))
+                  );
+                }}
+                onBeforeUpsertUserId={(id) => {
+                  clearDocDeletedInMeta(remoteMetaRef.current, 'users', sanitizeDocId(id, 'user'));
+                }}
+                onSyncAllModules={(d, m, a, p, k, u, pb, log, sem, sur, options) => {
                   syncAllModules(
                     d ?? dosenList,
                     m ?? mahasiswaList,
@@ -1797,23 +1809,24 @@ Departemen Kimia - Fakultas Sains dan Teknologi (FSTeM) Universitas Brawijaya
                     pb ?? pembimbingLapanganList,
                     log,
                     sem,
-                    sur
+                    sur,
+                    options
                   );
                 }}
                 onUpdateDosenList={(newList) => {
-                  syncAllModules(newList, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList);
+                  syncAllModules(newList, mahasiswaList, adminList, plpList, klkList, userList, pembimbingLapanganList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
                 onUpdateMahasiswaList={(newList) => {
-                  syncAllModules(dosenList, newList, adminList, plpList, klkList, userList, pembimbingLapanganList);
+                  syncAllModules(dosenList, newList, adminList, plpList, klkList, userList, pembimbingLapanganList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
                 onUpdateAdminList={(newList) => {
-                  syncAllModules(dosenList, mahasiswaList, newList, plpList, klkList, userList, pembimbingLapanganList);
+                  syncAllModules(dosenList, mahasiswaList, newList, plpList, klkList, userList, pembimbingLapanganList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
                 onUpdatePlpList={(newList) => {
-                  syncAllModules(dosenList, mahasiswaList, adminList, newList, klkList, userList, pembimbingLapanganList);
+                  syncAllModules(dosenList, mahasiswaList, adminList, newList, klkList, userList, pembimbingLapanganList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
                 onUpdatePembimbingLapanganList={(newList) => {
-                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, userList, newList);
+                  syncAllModules(dosenList, mahasiswaList, adminList, plpList, klkList, userList, newList, undefined, undefined, undefined, { skipReverseSdmUserCreation: true });
                 }}
               />
             )
